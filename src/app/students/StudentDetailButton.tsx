@@ -10,6 +10,8 @@ import { getButtonClassName } from '@/lib/button';
 type StudentDetailButtonProps = {
   name: string;
   gradeLabel: string;
+  /** 소속 반(부서 포함) */
+  className: string;
   genderLabel: string;
   birthDateText: string;
   address: string;
@@ -18,6 +20,8 @@ type StudentDetailButtonProps = {
   guardianName: string;
   relationshipLabel: string;
   guardianPhone: string;
+  /** 특이사항. 게스트 화면 등 노출하지 않을 때는 null */
+  note: string | null;
 };
 
 /**
@@ -26,6 +30,7 @@ type StudentDetailButtonProps = {
 export default function StudentDetailButton({
   name,
   gradeLabel,
+  className,
   genderLabel,
   birthDateText,
   address,
@@ -34,6 +39,7 @@ export default function StudentDetailButton({
   guardianName,
   relationshipLabel,
   guardianPhone,
+  note,
 }: StudentDetailButtonProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -126,7 +132,11 @@ export default function StudentDetailButton({
                     <dd className="text-left font-medium text-[var(--color-text)]">{name}</dd>
                   </div>
                   <div className="contents">
-                    <dt className="whitespace-nowrap text-left text-[var(--color-muted)]">학년</dt>
+                    <dt className="whitespace-nowrap text-left text-[var(--color-muted)]">소속 반</dt>
+                    <dd className="text-left font-medium text-[var(--color-text)]">{className}</dd>
+                  </div>
+                  <div className="contents">
+                    <dt className="whitespace-nowrap text-left text-[var(--color-muted)]">학년(참고)</dt>
                     <dd className="text-left font-medium text-[var(--color-text)]">{gradeLabel}</dd>
                   </div>
                   <div className="contents">
@@ -171,6 +181,14 @@ export default function StudentDetailButton({
                   </div>
                 </dl>
               </article>
+              {note !== null ? (
+                <article className="rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface-soft)] p-4 sm:col-span-2">
+                  <h3 className="mb-2 text-center text-sm font-semibold tracking-wide text-[var(--color-muted)]">
+                    특이사항
+                  </h3>
+                  <p className="whitespace-pre-line text-left text-sm text-[var(--color-text)]">{note || '없음'}</p>
+                </article>
+              ) : null}
             </div>
           </section>
         </div>

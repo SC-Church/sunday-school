@@ -8,6 +8,7 @@ import { getServerSession } from 'next-auth';
 
 import AppShell from '@/components/layout/AppShell';
 import { authOptions } from '@/lib/auth';
+import { getChurchNameSafely } from '@/server/settings/church-name';
 
 import './globals.css';
 import Providers from './providers';
@@ -47,8 +48,8 @@ export const metadata: Metadata = {
   metadataBase: resolveMetadataBase(),
   manifest: '/manifest.webmanifest',
   title: {
-    default: '서광 주일학교 관리 시스템',
-    template: '%s | 서광 주일학교 관리 시스템',
+    default: '송촌장로교회 주일학교 관리 시스템',
+    template: '%s | 송촌장로교회 주일학교 관리 시스템',
   },
   description: '주일학교 출석, 학생, 교사, 가입 승인을 한 곳에서 관리하는 시스템입니다.',
   icons: {
@@ -59,7 +60,7 @@ export const metadata: Metadata = {
     apple: [{ url: '/app-icons/apple-touch-icon.png', sizes: '180x180', type: 'image/png' }],
   },
   openGraph: {
-    title: '서광 주일학교 관리 시스템',
+    title: '송촌장로교회 주일학교 관리 시스템',
     description: '주일학교 출석, 학생, 교사, 가입 승인을 한 곳에서 관리하는 시스템입니다.',
     type: 'website',
     locale: 'ko_KR',
@@ -68,13 +69,13 @@ export const metadata: Metadata = {
         url: '/opengraph-image',
         width: 1200,
         height: 630,
-        alt: '서광 주일학교 관리 시스템',
+        alt: '송촌장로교회 주일학교 관리 시스템',
       },
     ],
   },
   twitter: {
     card: 'summary_large_image',
-    title: '서광 주일학교 관리 시스템',
+    title: '송촌장로교회 주일학교 관리 시스템',
     description: '주일학교 출석, 학생, 교사, 가입 승인을 한 곳에서 관리하는 시스템입니다.',
     images: ['/opengraph-image'],
   },
@@ -90,6 +91,8 @@ export default async function RootLayout({
 }>) {
   const session = await getServerSession(authOptions);
   const userDisplayName = session?.user?.name ?? session?.user?.email ?? '';
+  // 로그인한 사용자에게만 저장소를 읽는다(게스트 화면은 저장소를 조회하지 않는다는 원칙).
+  const churchName = session?.user?.id ? await getChurchNameSafely() : null;
 
   return (
     <html lang="ko" className={pretendard.className}>
@@ -99,6 +102,7 @@ export default async function RootLayout({
             role={session?.user?.role}
             approvalStatus={session?.user?.approvalStatus}
             userDisplayName={userDisplayName}
+            churchName={churchName}
           >
             {children}
           </AppShell>

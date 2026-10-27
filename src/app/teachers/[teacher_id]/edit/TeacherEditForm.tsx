@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 
 import RestrictedInput from '@/components/common/RestrictedInput';
 import { useToast } from '@/components/common/ToastProvider';
-import { TEACHER_GRADE_OPTIONS, type TeacherUpdatePayload } from '@/lib/validation/teacher';
+import type { TeacherUpdatePayload } from '@/lib/validation/teacher';
 
 const INPUT_CLASS_NAME =
   'rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] outline-none transition focus:border-[var(--color-primary)]';
@@ -19,9 +19,10 @@ type TeacherEditFormProps = {
     name: string;
     phone: string;
     birth_date: string;
-    grade: string;
     is_active: boolean;
   };
+  /** 담당 반 표시 문자열(관리자가 조직 관리에서 지정) */
+  assignedClassesText: string;
 };
 
 type FieldErrorMap = Partial<Record<keyof TeacherUpdatePayload, string>>;
@@ -29,7 +30,13 @@ type FieldErrorMap = Partial<Record<keyof TeacherUpdatePayload, string>>;
 /**
  * 교사 정보 수정 폼을 렌더링하고 API를 통해 저장한다.
  */
-export default function TeacherEditForm({ teacherId, email, isAdmin, initialValues }: TeacherEditFormProps) {
+export default function TeacherEditForm({
+  teacherId,
+  email,
+  isAdmin,
+  initialValues,
+  assignedClassesText,
+}: TeacherEditFormProps) {
   const router = useRouter();
   const { showToast } = useToast();
   const [fieldErrors, setFieldErrors] = useState<FieldErrorMap>({});
@@ -63,7 +70,6 @@ export default function TeacherEditForm({ teacherId, email, isAdmin, initialValu
           name: readValue('name'),
           phone: readValue('phone'),
           birth_date: readValue('birth_date'),
-          grade: readValue('grade'),
           is_active: formData.get('is_active') === 'on',
         }),
       });
@@ -155,16 +161,14 @@ export default function TeacherEditForm({ teacherId, email, isAdmin, initialValu
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="grid gap-1.5">
-          <span className="text-sm font-medium text-[var(--color-text)]">담당 학년</span>
-          <select name="grade" defaultValue={initialValues.grade} className={INPUT_CLASS_NAME}>
-            <option value="">선택</option>
-            {TEACHER_GRADE_OPTIONS.map((gradeOption) => (
-              <option key={gradeOption} value={gradeOption}>
-                {gradeOption}
-              </option>
-            ))}
-          </select>
-          {fieldErrors.grade ? <span className="text-xs text-[var(--color-danger)]">{fieldErrors.grade}</span> : null}
+          <span className="text-sm font-medium text-[var(--color-text)]">담당 반</span>
+          <input
+            type="text"
+            value={assignedClassesText || '미지정'}
+            readOnly
+            className="rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-soft)] px-3 py-2 text-sm text-[var(--color-muted)]"
+          />
+          <span className="text-xs text-[var(--color-muted)]">담당 반은 관리자가 [조직 관리]에서 지정합니다.</span>
         </label>
 
         <label className="flex items-center gap-2 rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-soft)] px-3 py-2 text-sm text-[var(--color-text)]">

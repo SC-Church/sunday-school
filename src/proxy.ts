@@ -3,7 +3,12 @@ import { NextResponse } from 'next/server';
 
 import { getToken } from 'next-auth/jwt';
 
-const PUBLIC_PATHS = ['/', '/login'];
+const PUBLIC_PATHS = ['/', '/login', '/signup'];
+// 로그인 전에 호출해야 하는 공개 API(회원가입)
+const PUBLIC_API_PATHS = ['/api/signup'];
+// 이미 로그인한 사용자가 오면 홈/상태 페이지로 돌려보내는 인증 화면
+const AUTH_ENTRY_PATHS = ['/login', '/signup'];
+const ADMIN_PATH_PREFIXES = ['/signup-management', '/admin', '/api/admin', '/students/import', '/api/students/import'];
 const GUEST_PATH_PREFIX = '/guest';
 const PENDING_PATH = '/pending';
 const REJECTED_PATH = '/rejected';
@@ -44,7 +49,19 @@ function isGuestPath(pathname: string): boolean {
  * 인증 검사를 생략해야 하는 내부 경로인지 확인한다.
  */
 function isBypassPath(pathname: string): boolean {
-  return pathname.startsWith('/_next') || pathname.startsWith('/api/auth') || pathname === '/favicon.ico';
+  return (
+    pathname.startsWith('/_next') ||
+    pathname.startsWith('/api/auth') ||
+    PUBLIC_API_PATHS.includes(pathname) ||
+    pathname === '/favicon.ico'
+  );
+}
+
+/**
+ * 관리자만 들어갈 수 있는 경로인지 확인한다(가입 관리, 조직 관리, 학년 진급, CSV 일괄 등록과 그 API).
+ */
+function isAdminOnlyPath(pathname: string): boolean {
+  return ADMIN_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
 }
 
 /**
@@ -121,11 +138,14 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(new URL('/', req.url));
   }
 
-  if (pathname.startsWith('/signup-management') && token.role !== 'ADMIN') {
+  if (isAdminOnlyPath(pathname) && token.role !== 'ADMIN') {
+    if (pathname.startsWith('/api/')) {
+      return NextResponse.json({ message: 'forbidden' }, { status: 403 });
+    }
     return NextResponse.redirect(new URL('/', req.url));
   }
 
-  if (pathname === '/login') {
+  if (AUTH_ENTRY_PATHS.includes(pathname)) {
     if (token.approvalStatus !== 'APPROVED') {
       return NextResponse.redirect(new URL(approvalStatusPath, req.url));
     }

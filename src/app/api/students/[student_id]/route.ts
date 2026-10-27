@@ -1,13 +1,10 @@
 import { NextResponse } from 'next/server';
 
+import { toErrorResponse } from '@/lib/api-errors';
 import { requireApprovedTeacher } from '@/lib/api-session';
-import { prisma } from '@/lib/prisma';
-import {
-  type StudentInputPayload,
-  parseKstBirthDate,
-  parseStudentInput,
-  toFieldErrorMap,
-} from '@/lib/validation/student';
+import { type StudentInputPayload, parseStudentInput, toFieldErrorMap } from '@/lib/validation/student';
+import { deleteStudent, updateStudent } from '@/server/db/repository';
+import { toStudentWriteInput } from '@/server/students/input';
 
 type RouteContext = {
   params: Promise<{
@@ -48,56 +45,19 @@ export async function PATCH(request: Request, context: RouteContext) {
     );
   }
 
-  const studentInput = parsedResult.data;
-  const birthDate = parseKstBirthDate(studentInput.birth_date);
+  const writeInput = toStudentWriteInput(parsedResult.data);
 
-  if (!birthDate) {
+  if (!writeInput) {
     return NextResponse.json(
       { message: 'invalid_input', errors: { birth_date: '생년월일 형식이 올바르지 않습니다.' } },
       { status: 400 }
     );
   }
 
-  const hasGuardianContact = Boolean(
-    studentInput.guardian_name && studentInput.guardian_relationship && studentInput.guardian_phone
-  );
-
   try {
-    await prisma.$transaction(async (tx) => {
-      await tx.student.update({
-        where: { id: studentId },
-        data: {
-          name: studentInput.name,
-          gender: studentInput.gender,
-          birthDate,
-          address: studentInput.address,
-          phone: studentInput.phone || null,
-        },
-      });
-
-      if (hasGuardianContact) {
-        await tx.guardianContact.upsert({
-          where: { studentId },
-          update: {
-            name: studentInput.guardian_name!,
-            relationship: studentInput.guardian_relationship!,
-            phone: studentInput.guardian_phone!,
-          },
-          create: {
-            studentId,
-            name: studentInput.guardian_name!,
-            relationship: studentInput.guardian_relationship!,
-            phone: studentInput.guardian_phone!,
-          },
-        });
-      } else {
-        await tx.guardianContact.deleteMany({
-          where: { studentId },
-        });
-      }
-    });
-  } catch {
-    return NextResponse.json({ message: 'server_error' }, { status: 500 });
+    await updateStudent(studentId, writeInput);
+  } catch (error) {
+    return toErrorResponse(error);
   }
 
   return NextResponse.json({ message: 'ok' });
@@ -120,11 +80,9 @@ export async function DELETE(_request: Request, context: RouteContext) {
   }
 
   try {
-    await prisma.student.delete({
-      where: { id: studentId },
-    });
-  } catch {
-    return NextResponse.json({ message: 'server_error' }, { status: 500 });
+    await deleteStudent(studentId);
+  } catch (error) {
+    return toErrorResponse(error);
   }
 
   return NextResponse.json({ message: 'ok' });

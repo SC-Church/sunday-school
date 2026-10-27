@@ -4,10 +4,10 @@ import { useEffect, useState } from 'react';
 
 import { faXmark } from '@fortawesome/free-solid-svg-icons';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
-import { AttendanceStatus } from '@prisma/client';
 
 import { useToast } from '@/components/common/ToastProvider';
 import { getButtonClassName } from '@/lib/button';
+import { AttendanceStatus } from '@/types/domain';
 
 type AttendanceLedgerResponse = {
   studentName: string;

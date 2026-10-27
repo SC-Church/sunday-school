@@ -3,8 +3,13 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
 
-import { prisma } from '@/lib/prisma';
+import { getServerSession } from 'next-auth';
+
+import { authOptions } from '@/lib/auth';
+import { buildClassGroups, getStudentClassId } from '@/server/attendance/service';
+import { getStoreSnapshot, withGuardians } from '@/server/db/repository';
 import { formatDateToKoreanYmd } from '@/utils/date';
+import { getSchoolYearInKst } from '@/utils/grade';
 
 import StudentForm from '../../StudentForm';
 
@@ -24,12 +29,11 @@ type StudentEditPageProps = {
 export default async function StudentEditPage({ params }: StudentEditPageProps) {
   const { student_id: studentId } = await params;
 
-  const student = await prisma.student.findUnique({
-    where: { id: studentId },
-    include: {
-      guardianContact: true,
-    },
-  });
+  const session = await getServerSession(authOptions);
+  const snapshot = await getStoreSnapshot();
+  const schoolYear = getSchoolYearInKst();
+  const classGroups = buildClassGroups(snapshot, schoolYear, session?.user?.id ?? null);
+  const student = withGuardians(snapshot).find((candidate) => candidate.id === studentId) ?? null;
 
   if (!student) {
     redirect('/students');
@@ -44,6 +48,10 @@ export default async function StudentEditPage({ params }: StudentEditPageProps) 
     guardian_name: student.guardianContact?.name ?? '',
     guardian_relationship: student.guardianContact?.relationship ?? '',
     guardian_phone: student.guardianContact?.phone ?? '',
+    class_id: getStudentClassId(snapshot, studentId, schoolYear) ?? '',
+    note: student.note ?? '',
+    is_new_friend: student.isNewFriend,
+    first_visit_date: student.firstVisitDate ? formatDateToKoreanYmd(student.firstVisitDate) : '',
   };
 
   return (
@@ -56,7 +64,7 @@ export default async function StudentEditPage({ params }: StudentEditPageProps) 
           </Link>
         </div>
 
-        <StudentForm mode="edit" studentId={studentId} initialValues={initialValues} />
+        <StudentForm mode="edit" studentId={studentId} initialValues={initialValues} classGroups={classGroups} />
       </section>
     </main>
   );

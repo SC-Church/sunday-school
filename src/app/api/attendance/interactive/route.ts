@@ -1,28 +1,16 @@
 import { NextResponse } from 'next/server';
 
-import { AttendanceStatus } from '@prisma/client';
-import { getServerSession } from 'next-auth';
-
-import { authOptions } from '@/lib/auth';
+import { requireApprovedTeacher } from '@/lib/api-session';
+import { parseClassScope } from '@/lib/attendance-display';
+import { serializeInteractiveData } from '@/server/attendance/serialize';
 import {
   TALENT_ADJUST_VALUES,
   getAttendanceInteractiveData,
-  getSelectedAttendanceTab,
+  getAttendancePeriodInfo,
   updateAttendanceWithExpectedStatus,
   updateStudentTalent,
 } from '@/server/attendance/service';
-import { TEACHER_APPROVAL_STATUS } from '@/types/teacher';
-import { formatDateToKoreanYmd } from '@/utils/date';
-
-const KOREAN_WEEKDAY_INDEX_BY_SHORT_NAME: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
+import { AttendanceStatus } from '@/types/domain';
 
 type ToggleAttendanceRequestBody = {
   action: 'toggle_attendance';
@@ -38,104 +26,30 @@ type AdjustTalentRequestBody = {
 };
 
 /**
- * 한국 시간 기준 금주 일요일 00:00 값을 반환한다.
- */
-function getCurrentSundayKstDate(baseDate: Date = new Date()): Date {
-  const todayKoreanYmd = formatDateToKoreanYmd(baseDate);
-  const todayKstMidnight = new Date(`${todayKoreanYmd}T00:00:00+09:00`);
-  const weekdayName = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Seoul',
-    weekday: 'short',
-  }).format(baseDate);
-  const weekdayIndex = KOREAN_WEEKDAY_INDEX_BY_SHORT_NAME[weekdayName] ?? 0;
-  const currentSunday = new Date(todayKstMidnight);
-  currentSunday.setUTCDate(currentSunday.getUTCDate() - weekdayIndex);
-  return currentSunday;
-}
-
-/**
- * 다음 주 일요일 00:00 값을 반환한다.
- */
-function getNextSundayKstDate(currentSundayKstDate: Date): Date {
-  const nextSunday = new Date(currentSundayKstDate);
-  nextSunday.setUTCDate(nextSunday.getUTCDate() + 7);
-  return nextSunday;
-}
-
-/**
- * 승인된 교사 세션을 검증한다.
- */
-async function validateApprovedSession(): Promise<
-  | {
-      ok: true;
-      teacherId: string;
-      teacherName: string | null;
-      teacherEmail: string | null;
-    }
-  | {
-      ok: false;
-      response: NextResponse<{ message: string }>;
-    }
-> {
-  const session = await getServerSession(authOptions);
-  const teacherId = session?.user?.id;
-
-  if (!teacherId) {
-    return {
-      ok: false,
-      response: NextResponse.json({ message: 'forbidden' }, { status: 403 }),
-    };
-  }
-
-  if (session.user.approvalStatus !== TEACHER_APPROVAL_STATUS.APPROVED) {
-    return {
-      ok: false,
-      response: NextResponse.json({ message: 'forbidden' }, { status: 403 }),
-    };
-  }
-
-  return {
-    ok: true,
-    teacherId,
-    teacherName: session.user.name ?? null,
-    teacherEmail: session.user.email ?? null,
-  };
-}
-
-/**
- * 출석 인터랙션 조회 API
+ * 출석 인터랙션 조회 API. class_id로 반(또는 all/unassigned)을 고른다.
  */
 export async function GET(request: Request) {
-  const validatedSession = await validateApprovedSession();
+  const guardResult = await requireApprovedTeacher();
 
-  if (!validatedSession.ok) {
-    return validatedSession.response;
+  if (!guardResult.ok) {
+    return guardResult.response;
   }
 
   const url = new URL(request.url);
-  const selectedTab = getSelectedAttendanceTab(url.searchParams.get('attendance_tab') ?? undefined);
-  const interactiveData = await getAttendanceInteractiveData(selectedTab);
+  const scope = parseClassScope(url.searchParams.get('class_id') ?? undefined);
+  const interactiveData = await getAttendanceInteractiveData(scope, guardResult.teacherId);
 
-  return NextResponse.json({
-    studentsForTable: interactiveData.studentsForTable.map((student) => ({
-      ...student,
-      birthDate: student.birthDate.toISOString(),
-    })),
-    talentLogs: interactiveData.talentLogs.map((log) => ({
-      ...log,
-      transactedAt: log.transactedAt.toISOString(),
-    })),
-  });
+  return NextResponse.json(serializeInteractiveData(interactiveData));
 }
 
 /**
  * 출석/달란트 변경 API
  */
 export async function POST(request: Request) {
-  const validatedSession = await validateApprovedSession();
+  const guardResult = await requireApprovedTeacher();
 
-  if (!validatedSession.ok) {
-    return validatedSession.response;
+  if (!guardResult.ok) {
+    return guardResult.response;
   }
 
   let body: ToggleAttendanceRequestBody | AdjustTalentRequestBody;
@@ -145,6 +59,8 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ message: 'invalid_request' }, { status: 400 });
   }
+
+  const { attendanceDate, nextSundayDate } = getAttendancePeriodInfo();
 
   if (body.action === 'toggle_attendance') {
     if (
@@ -159,10 +75,10 @@ export async function POST(request: Request) {
     try {
       const result = await updateAttendanceWithExpectedStatus(
         body.student_id,
-        getCurrentSundayKstDate(),
+        attendanceDate,
         body.expected_current_status,
         body.next_status,
-        validatedSession.teacherId
+        guardResult.teacherId
       );
 
       if (result.result === 'stale_state') {
@@ -187,14 +103,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ message: 'invalid_request' }, { status: 400 });
     }
 
-    const attendanceDate = getCurrentSundayKstDate();
-    const nextSundayDate = getNextSundayKstDate(attendanceDate);
-
     try {
       const updatedResult = await updateStudentTalent(
         body.student_id,
         Number(amountString),
-        validatedSession.teacherId,
+        guardResult.teacherId,
         attendanceDate,
         nextSundayDate
       );
@@ -210,8 +123,8 @@ export async function POST(request: Request) {
           amount: updatedResult.transaction.amount,
           transacted_at: updatedResult.transaction.transactedAt.toISOString(),
           teacher: {
-            name: validatedSession.teacherName,
-            email: validatedSession.teacherEmail,
+            name: guardResult.teacherName,
+            email: guardResult.teacherEmail,
           },
         },
       });

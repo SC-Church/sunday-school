@@ -5,8 +5,8 @@ import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 
 import { authOptions } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
-import { TEACHER_ROLE } from '@/types/teacher';
+import { listTeachers } from '@/server/db/repository';
+import { TEACHER_APPROVAL_STATUS, TEACHER_ROLE } from '@/types/teacher';
 
 import SignupManagementList from './SignupManagementList';
 
@@ -24,35 +24,15 @@ export default async function SignupManagementPage() {
     redirect('/');
   }
 
-  const [pendingTeachers, processedTeachers] = await Promise.all([
-    prisma.teacher.findMany({
-      where: { approvalStatus: 'PENDING' },
-      orderBy: { createdAt: 'desc' },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        createdAt: true,
-      },
-    }),
-    prisma.teacher.findMany({
-      where: {
-        approvalStatus: {
-          in: ['APPROVED', 'REJECTED'],
-        },
-      },
-      orderBy: [{ approvalProcessedAt: 'desc' }, { updatedAt: 'desc' }],
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        approvalStatus: true,
-        role: true,
-        approvalProcessedAt: true,
-        updatedAt: true,
-      },
-    }),
-  ]);
+  const teachers = await listTeachers();
+  const pendingTeachers = teachers
+    .filter((teacher) => teacher.approvalStatus === TEACHER_APPROVAL_STATUS.PENDING)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  const processedTeachers = teachers
+    .filter((teacher) => teacher.approvalStatus !== TEACHER_APPROVAL_STATUS.PENDING)
+    .sort(
+      (a, b) => (b.approvalProcessedAt ?? b.updatedAt).getTime() - (a.approvalProcessedAt ?? a.updatedAt).getTime()
+    );
 
   return (
     <main className="min-h-screen px-4 py-8 sm:px-6">

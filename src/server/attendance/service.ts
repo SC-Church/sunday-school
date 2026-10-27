@@ -1,54 +1,31 @@
-﻿import { AttendanceStatus, Gender, Prisma, TalentTransactionReason } from '@prisma/client';
-
-import { prisma } from '@/lib/prisma';
+import { type ClassScope } from '@/lib/attendance-display';
 import { sortStudentsByGradeDescThenName } from '@/lib/student-sort';
 import { getWeeklyCalendarSummary } from '@/server/calendar/google-calendar';
-import { formatDateToKoreanYmd, getKoreanYear } from '@/utils/date';
-import { getGradeLabelByBirthDateInKst, type StudentGradeLabel } from '@/utils/grade';
+import {
+  type StoreSnapshot,
+  adjustStudentTalent,
+  findActiveEnrollment,
+  getStoreSnapshot,
+  setAttendanceStatusIfExpected,
+} from '@/server/db/repository';
+import type { ClassRecord, DepartmentRecord, EnrollmentRecord } from '@/server/db/sheet-schema';
+import { AttendanceStatus, EnrollmentStatus, type Gender, TalentTransactionReason } from '@/types/domain';
+import {
+  addWeeksToSunday,
+  formatDateToKoreanYmd,
+  getKoreanWeekdayIndex,
+  getLastSundayOfMonthKst,
+  getSundayOfWeekInKst,
+} from '@/utils/date';
+import { type StudentGradeLabel, getGradeLabelByBirthDateInKst, getSchoolYearInKst } from '@/utils/grade';
 
-const ATTENDANCE_TAB_KEYS = [
-  'this_week',
-  'all',
-  'grade_6',
-  'grade_5',
-  'grade_4',
-  'grade_3',
-  'grade_2',
-  'grade_1',
-  'kindergarten',
-] as const;
+import { countPresentSince } from './stats';
 
-const KOREAN_WEEKDAY_INDEX_BY_SHORT_NAME: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
-
-const SERIALIZABLE_RETRY_MAX_COUNT = 2;
-const SERIALIZABLE_RETRY_DELAY_MS = 80;
+const TALENT_LOG_LIMIT = 40;
+/** 새친구가 이 횟수 이상 출석하면 정착 후보로 표시한다. */
+export const NEW_FRIEND_SETTLE_THRESHOLD = 4;
 
 export const TALENT_ADJUST_VALUES = new Set(['3', '2', '1', '-1']);
-
-export type AttendanceTabKey = (typeof ATTENDANCE_TAB_KEYS)[number];
-
-// Grade labels are defined only in src/utils/grade.ts (see CLAUDE.md).
-type GradeLabel = StudentGradeLabel;
-
-export const ATTENDANCE_TABS: ReadonlyArray<{ key: AttendanceTabKey; label: string }> = [
-  { key: 'this_week', label: '\uAE08\uC8FC \uCD9C\uC11D' },
-  { key: 'all', label: '\uC804\uCCB4' },
-  { key: 'grade_6', label: '6\uD559\uB144' },
-  { key: 'grade_5', label: '5\uD559\uB144' },
-  { key: 'grade_4', label: '4\uD559\uB144' },
-  { key: 'grade_3', label: '3\uD559\uB144' },
-  { key: 'grade_2', label: '2\uD559\uB144' },
-  { key: 'grade_1', label: '1\uD559\uB144' },
-  { key: 'kindergarten', label: '\uC720\uC544\uBD80' },
-];
 
 export type StudentRow = {
   id: string;
@@ -57,8 +34,10 @@ export type StudentRow = {
   birthDate: Date;
   currentTalent: number;
   weeklyExtraTalent: number;
-  gradeLabel: GradeLabel;
+  gradeLabel: StudentGradeLabel;
   attendanceStatus: AttendanceStatus;
+  className: string | null;
+  isNewFriend: boolean;
 };
 
 export type TalentLogRow = {
@@ -74,11 +53,35 @@ export type TalentLogRow = {
   } | null;
 };
 
+export type NewFriendRow = {
+  id: string;
+  name: string;
+  className: string | null;
+  firstVisitDate: Date | null;
+  presentCount: number;
+};
+
+export type ClassOption = {
+  id: string;
+  name: string;
+  departmentId: string;
+  departmentName: string;
+  /** 현재 로그인한 교사가 담당하는 반인지 */
+  isMine: boolean;
+  studentCount: number;
+};
+
+export type ClassOptionGroup = {
+  departmentId: string;
+  departmentName: string;
+  classes: ClassOption[];
+};
+
 type BirthdayStudentRow = {
   id: string;
   name: string;
   birthDate: Date;
-  gradeLabel: GradeLabel;
+  gradeLabel: StudentGradeLabel;
 };
 
 type AttendancePageData = {
@@ -86,92 +89,140 @@ type AttendancePageData = {
   nextSundayDate: Date;
   currentQuarter: 1 | 2 | 3 | 4;
   shouldShowBirthdayPartyBanner: boolean;
-  quarterlyBirthdayStudents: Array<{
-    id: string;
-    name: string;
-    gradeLabel: GradeLabel;
-  }>;
-  thisMonthTeacherBirthdays: Array<{
-    id: string;
-    displayName: string;
-  }>;
-  nextMonthTeacherBirthdays: Array<{
-    id: string;
-    displayName: string;
-  }>;
+  quarterlyBirthdayStudents: Array<{ id: string; name: string; gradeLabel: StudentGradeLabel }>;
+  thisMonthTeacherBirthdays: Array<{ id: string; displayName: string }>;
+  nextMonthTeacherBirthdays: Array<{ id: string; displayName: string }>;
   todayPresentCount: number;
-  weeklyTrend: Array<{
-    label: string;
-    count: number;
-  }>;
-  currentWeekCalendarSummary: {
-    title: string;
-    worshipDate: string | null;
-    socialLeader: string | null;
-    pulpitLeader: string | null;
-    weeklySchedules: string[];
-  } | null;
-  nextWeekCalendarSummary: {
-    title: string;
-    worshipDate: string | null;
-    socialLeader: string | null;
-    pulpitLeader: string | null;
-    weeklySchedules: string[];
-  } | null;
+  weeklyTrend: Array<{ label: string; count: number }>;
+  currentWeekCalendarSummary: CalendarSummary | null;
+  nextWeekCalendarSummary: CalendarSummary | null;
+};
+
+type CalendarSummary = {
+  title: string;
+  worshipDate: string | null;
+  socialLeader: string | null;
+  pulpitLeader: string | null;
+  weeklySchedules: string[];
+};
+
+export type AttendanceInteractiveData = {
+  scope: ClassScope;
+  schoolYear: number;
+  classGroups: ClassOptionGroup[];
+  unassignedCount: number;
   studentsForTable: StudentRow[];
+  newFriends: NewFriendRow[];
   talentLogs: TalentLogRow[];
 };
 
-export function getSelectedAttendanceTab(tabValue: string | string[] | undefined): AttendanceTabKey {
-  const resolvedValue = Array.isArray(tabValue) ? tabValue[0] : tabValue;
-
-  if (resolvedValue && ATTENDANCE_TAB_KEYS.includes(resolvedValue as AttendanceTabKey)) {
-    return resolvedValue as AttendanceTabKey;
-  }
-
-  return 'this_week';
+/**
+ * 출석 기준 주(이번 주 일요일)와 다음 일요일을 반환한다.
+ */
+export function getAttendancePeriodInfo(baseDate: Date = new Date()): {
+  attendanceDate: Date;
+  nextSundayDate: Date;
+} {
+  const attendanceDate = getSundayOfWeekInKst(baseDate);
+  return { attendanceDate, nextSundayDate: addWeeksToSunday(attendanceDate, 1) };
 }
 
-export function getGenderLabel(gender: Gender): string {
-  return gender === Gender.MALE ? '\uB0A8' : '\uC5EC';
+/**
+ * 학년도의 활성 반을 부서 순서·반 순서대로 묶어 선택지로 만든다.
+ */
+export function buildClassGroups(
+  snapshot: Pick<StoreSnapshot, 'departments' | 'classes' | 'enrollments'>,
+  schoolYear: number,
+  teacherId: string | null
+): ClassOptionGroup[] {
+  const activeEnrollmentCountByClassId = new Map<string, number>();
+  snapshot.enrollments.forEach((enrollment) => {
+    if (enrollment.schoolYear === schoolYear && enrollment.status === EnrollmentStatus.ACTIVE) {
+      activeEnrollmentCountByClassId.set(
+        enrollment.classId,
+        (activeEnrollmentCountByClassId.get(enrollment.classId) ?? 0) + 1
+      );
+    }
+  });
+
+  return snapshot.departments
+    .filter((department) => department.isActive)
+    .map((department) => ({
+      departmentId: department.id,
+      departmentName: department.name,
+      classes: snapshot.classes
+        .filter(
+          (classRecord) =>
+            classRecord.departmentId === department.id && classRecord.schoolYear === schoolYear && classRecord.isActive
+        )
+        .map((classRecord) => ({
+          id: classRecord.id,
+          name: classRecord.name,
+          departmentId: department.id,
+          departmentName: department.name,
+          isMine: teacherId !== null && classRecord.teacherIds.includes(teacherId),
+          studentCount: activeEnrollmentCountByClassId.get(classRecord.id) ?? 0,
+        })),
+    }))
+    .filter((group) => group.classes.length > 0);
 }
 
-export function getGradeDisplayLabel(student: Pick<StudentRow, 'gradeLabel' | 'birthDate'>): string {
-  if (student.gradeLabel !== '\uC720\uC544\uBD80') {
-    return student.gradeLabel;
-  }
+/**
+ * 범위가 지정되지 않았을 때의 기본 범위: 내 반 → 첫 반 → 전체.
+ */
+export function resolveDefaultClassScope(classGroups: ClassOptionGroup[]): ClassScope {
+  const allClasses = classGroups.flatMap((group) => group.classes);
+  const preferred = allClasses.find((classOption) => classOption.isMine) ?? allClasses[0];
 
-  const currentYearInKst = getKoreanYear(new Date());
-  const yearlyAge = Math.max(0, currentYearInKst - getKoreanYear(student.birthDate));
-  return `\uC720\uC544\uBD80 (\uC5F0 ${yearlyAge}\uC138)`;
+  return preferred ? { kind: 'class', classId: preferred.id } : { kind: 'all' };
 }
 
-export async function getAttendancePageData(selectedTab: AttendanceTabKey): Promise<AttendancePageData> {
-  const attendanceDate = getCurrentSundayKstDate();
-  const nextSundayDate = getNextSundayKstDate(attendanceDate);
-  const todayKstDate = new Date(`${formatDateToKoreanYmd(new Date())}T00:00:00+09:00`);
-  const todayKstYmd = formatDateToKoreanYmd(todayKstDate);
+/**
+ * 학생 id → 현재 학년도 반 이름 맵을 만든다.
+ */
+function buildClassNameByStudentId(
+  enrollments: ReadonlyArray<EnrollmentRecord>,
+  classes: ReadonlyArray<ClassRecord>,
+  departments: ReadonlyArray<DepartmentRecord>,
+  schoolYear: number
+): Map<string, { classId: string; className: string; departmentName: string }> {
+  const classById = new Map(classes.map((classRecord) => [classRecord.id, classRecord]));
+  const departmentNameById = new Map(departments.map((department) => [department.id, department.name]));
+  const result = new Map<string, { classId: string; className: string; departmentName: string }>();
+
+  enrollments.forEach((enrollment) => {
+    if (enrollment.schoolYear !== schoolYear || enrollment.status !== EnrollmentStatus.ACTIVE) {
+      return;
+    }
+    const classRecord = classById.get(enrollment.classId);
+    if (classRecord) {
+      result.set(enrollment.studentId, {
+        classId: classRecord.id,
+        className: classRecord.name,
+        departmentName: departmentNameById.get(classRecord.departmentId) ?? '',
+      });
+    }
+  });
+
+  return result;
+}
+
+/**
+ * 대시보드용 데이터(생일, 주간 추이, 주간 일정)를 만든다. 전체 학생이 대상이다.
+ */
+export async function getAttendancePageData(): Promise<AttendancePageData> {
+  const snapshot = await getStoreSnapshot();
+  const { attendanceDate, nextSundayDate } = getAttendancePeriodInfo();
+  const todayKstYmd = formatDateToKoreanYmd(new Date());
   const currentQuarter = getCurrentQuarterByLastSunday(attendanceDate);
   const [quarterStartMonth, quarterEndMonth] = getQuarterMonthRange(currentQuarter);
-  const currentQuarterEndMonth = getQuarterEndMonth(currentQuarter);
-  const quarterEndSunday = getLastSundayOfMonthKst(Number(todayKstYmd.slice(0, 4)), currentQuarterEndMonth);
+  const quarterEndSunday = getLastSundayOfMonthKst(Number(todayKstYmd.slice(0, 4)), getQuarterEndMonth(currentQuarter));
   const shouldShowBirthdayPartyBanner = quarterEndSunday >= attendanceDate && quarterEndSunday < nextSundayDate;
   const thisMonth = Number(formatDateToKoreanYmd(attendanceDate).slice(5, 7));
   const nextMonth = thisMonth === 12 ? 1 : thisMonth + 1;
 
-  const students = await prisma.student.findMany({
-    orderBy: { name: 'asc' },
-    select: {
-      id: true,
-      name: true,
-      gender: true,
-      birthDate: true,
-      currentTalent: true,
-    },
-  });
-
-  const quarterlyBirthdayStudents = sortBirthdayStudents(
-    students
+  const quarterlyBirthdayStudents = sortStudentsByGradeDescThenName<BirthdayStudentRow>(
+    snapshot.students
       .map((student) => ({
         id: student.id,
         name: student.name,
@@ -181,163 +232,56 @@ export async function getAttendancePageData(selectedTab: AttendanceTabKey): Prom
       .filter((student) => {
         const birthMonth = Number(formatDateToKoreanYmd(student.birthDate).slice(5, 7));
         return birthMonth >= quarterStartMonth && birthMonth <= quarterEndMonth;
-      }),
+      })
   );
 
-  const teacherBirthdays = await prisma.teacher.findMany({
-    where: {
-      approvalStatus: 'APPROVED',
-      birthDate: {
-        not: null,
-      },
-    },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      birthDate: true,
-    },
-    orderBy: {
-      name: 'asc',
-    },
-  });
-
-  const thisMonthTeacherBirthdays = teacherBirthdays.filter((teacher) => {
-    if (!teacher.birthDate) {
-      return false;
-    }
-
-    const birthMonth = Number(formatDateToKoreanYmd(teacher.birthDate).slice(5, 7));
-    return birthMonth === thisMonth;
-  });
-
-  const nextMonthTeacherBirthdays = teacherBirthdays.filter((teacher) => {
-    if (!teacher.birthDate) {
-      return false;
-    }
-
-    const birthMonth = Number(formatDateToKoreanYmd(teacher.birthDate).slice(5, 7));
-    return birthMonth === nextMonth;
-  });
-
-  const attendanceRows = await prisma.attendance.findMany({
-    where: {
-      attendanceDate,
-    },
-    select: {
-      studentId: true,
-      status: true,
-    },
-  });
-
-  const attendanceStatusByStudentId = new Map(attendanceRows.map((row) => [row.studentId, row.status]));
-  const todayPresentCount = attendanceRows.filter((row) => row.status === AttendanceStatus.PRESENT).length;
-
-  const weeklyTrendDates = getWeeklySundaySeriesForLastThreeMonths(attendanceDate);
-  const trendStartSunday = weeklyTrendDates[0];
-  const weeklyPresentGroup = await prisma.attendance.groupBy({
-    by: ['attendanceDate'],
-    where: {
-      attendanceDate: {
-        gte: trendStartSunday,
-        lte: attendanceDate,
-      },
-      status: AttendanceStatus.PRESENT,
-    },
-    _count: {
-      _all: true,
-    },
-  });
-
-  const weeklyPresentCountByDate = new Map(
-    weeklyPresentGroup.map((row) => [formatDateToKoreanYmd(row.attendanceDate), row._count._all]),
+  const teacherBirthdays = snapshot.teachers
+    .filter((teacher) => teacher.approvalStatus === 'APPROVED' && teacher.birthDate !== null)
+    .sort(compareTeachersByNameNullsLast);
+  const getBirthMonth = (birthDate: Date | null) =>
+    birthDate ? Number(formatDateToKoreanYmd(birthDate).slice(5, 7)) : 0;
+  const thisMonthTeacherBirthdays = teacherBirthdays.filter(
+    (teacher) => getBirthMonth(teacher.birthDate) === thisMonth
   );
-  const weeklyTrend = weeklyTrendDates.map((targetSunday) => {
-    const dateKey = formatDateToKoreanYmd(targetSunday);
-    return {
-      label: formatDateToMmDd(targetSunday),
-      count: weeklyPresentCountByDate.get(dateKey) ?? 0,
-    };
+  const nextMonthTeacherBirthdays = teacherBirthdays.filter(
+    (teacher) => getBirthMonth(teacher.birthDate) === nextMonth
+  );
+
+  const todayPresentCount = snapshot.attendances.filter(
+    (row) => row.attendanceDate.getTime() === attendanceDate.getTime() && row.status === AttendanceStatus.PRESENT
+  ).length;
+
+  const weeklyTrendDates = Array.from({ length: 13 }, (_, index) => addWeeksToSunday(attendanceDate, index - 12));
+  const weeklyPresentCountByDate = new Map<string, number>();
+  snapshot.attendances.forEach((row) => {
+    if (
+      row.status === AttendanceStatus.PRESENT &&
+      row.attendanceDate >= weeklyTrendDates[0] &&
+      row.attendanceDate <= attendanceDate
+    ) {
+      const dateKey = formatDateToKoreanYmd(row.attendanceDate);
+      weeklyPresentCountByDate.set(dateKey, (weeklyPresentCountByDate.get(dateKey) ?? 0) + 1);
+    }
   });
+  const weeklyTrend = weeklyTrendDates.map((targetSunday) => ({
+    label: formatDateToKoreanYmd(targetSunday).slice(5),
+    count: weeklyPresentCountByDate.get(formatDateToKoreanYmd(targetSunday)) ?? 0,
+  }));
 
   const worshipWeekSundayDate = getWorshipWeekSundayKstDate();
-  const nextWorshipWeekSundayDate = getNextSundayKstDate(worshipWeekSundayDate);
-  const thirdWorshipWeekSundayDate = getNextSundayKstDate(nextWorshipWeekSundayDate);
-  const currentWeekCalendarSummary = await getWeeklyCalendarSummary(worshipWeekSundayDate, nextWorshipWeekSundayDate);
-  const nextWeekCalendarSummary = await getWeeklyCalendarSummary(nextWorshipWeekSundayDate, thirdWorshipWeekSundayDate);
-
-  const weeklyManualTalentSums = await prisma.talentTransaction.groupBy({
-    by: ['studentId'],
-    where: {
-      reason: TalentTransactionReason.MANUAL_ADJUST,
-      transactedAt: {
-        gte: attendanceDate,
-        lt: nextSundayDate,
-      },
-    },
-    _sum: {
-      amount: true,
-    },
-  });
-
-  const weeklyManualTalentByStudentId = new Map(
-    weeklyManualTalentSums.map((row) => [row.studentId, row._sum.amount ?? 0]),
-  );
-
-  const studentRows: StudentRow[] = students
-    .map((student) => ({
-      ...student,
-      gradeLabel: getGradeLabelByBirthDateInKst(student.birthDate),
-      attendanceStatus: attendanceStatusByStudentId.get(student.id) ?? AttendanceStatus.ABSENT,
-      weeklyExtraTalent: weeklyManualTalentByStudentId.get(student.id) ?? 0,
-    }))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ko-KR'));
-
-  const sortedStudentRows = sortStudentsByGradeDescThenName(studentRows);
-  const filteredStudents = filterStudentsByTab(sortedStudentRows, selectedTab);
-  const studentsForTable =
-    selectedTab === 'this_week'
-      ? filteredStudents.filter((student) => student.attendanceStatus === AttendanceStatus.PRESENT)
-      : filteredStudents;
-
-  const talentLogs: TalentLogRow[] = await prisma.talentTransaction.findMany({
-    where: {
-      reason: TalentTransactionReason.MANUAL_ADJUST,
-      transactedAt: {
-        gte: attendanceDate,
-        lt: nextSundayDate,
-      },
-    },
-    orderBy: { transactedAt: 'desc' },
-    take: 40,
-    select: {
-      id: true,
-      amount: true,
-      transactedAt: true,
-      student: {
-        select: {
-          name: true,
-        },
-      },
-      teacher: {
-        select: {
-          name: true,
-          email: true,
-        },
-      },
-    },
-  });
+  const nextWorshipWeekSundayDate = addWeeksToSunday(worshipWeekSundayDate, 1);
+  const thirdWorshipWeekSundayDate = addWeeksToSunday(nextWorshipWeekSundayDate, 1);
+  const [currentWeekCalendarSummary, nextWeekCalendarSummary] = await Promise.all([
+    getWeeklyCalendarSummary(worshipWeekSundayDate, nextWorshipWeekSundayDate),
+    getWeeklyCalendarSummary(nextWorshipWeekSundayDate, thirdWorshipWeekSundayDate),
+  ]);
 
   return {
     attendanceDate,
     nextSundayDate,
     currentQuarter,
     shouldShowBirthdayPartyBanner,
-    quarterlyBirthdayStudents: quarterlyBirthdayStudents.map((student) => ({
-      id: student.id,
-      name: student.name,
-      gradeLabel: student.gradeLabel,
-    })),
+    quarterlyBirthdayStudents: quarterlyBirthdayStudents.map(({ id, name, gradeLabel }) => ({ id, name, gradeLabel })),
     thisMonthTeacherBirthdays: thisMonthTeacherBirthdays.map((teacher) => ({
       id: teacher.id,
       displayName: teacher.name ?? teacher.email,
@@ -350,419 +294,224 @@ export async function getAttendancePageData(selectedTab: AttendanceTabKey): Prom
     weeklyTrend,
     currentWeekCalendarSummary,
     nextWeekCalendarSummary,
-    studentsForTable,
-    talentLogs,
   };
 }
 
-export async function getAttendanceInteractiveData(selectedTab: AttendanceTabKey): Promise<{
-  studentsForTable: StudentRow[];
-  talentLogs: TalentLogRow[];
-}> {
-  const attendanceDate = getCurrentSundayKstDate();
-  const nextSundayDate = getNextSundayKstDate(attendanceDate);
-
-  const students = await prisma.student.findMany({
-    orderBy: { name: 'asc' },
-    select: {
-      id: true,
-      name: true,
-      gender: true,
-      birthDate: true,
-      currentTalent: true,
-    },
+/**
+ * 출석 관리 화면 데이터를 만든다. 범위가 없으면 교사의 담당 반을 기본으로 고른다.
+ */
+export async function getAttendanceInteractiveData(
+  requestedScope: ClassScope | null,
+  teacherId: string | null
+): Promise<AttendanceInteractiveData> {
+  const snapshot = await getStoreSnapshot();
+  const { attendanceDate, nextSundayDate } = getAttendancePeriodInfo();
+  const schoolYear = getSchoolYearInKst();
+  const classGroups = buildClassGroups(snapshot, schoolYear, teacherId);
+  const scope = requestedScope ?? resolveDefaultClassScope(classGroups);
+  const classInfoByStudentId = buildClassNameByStudentId(
+    snapshot.enrollments,
+    snapshot.classes,
+    snapshot.departments,
+    schoolYear
+  );
+  const attendanceStatusByStudentId = new Map(
+    snapshot.attendances
+      .filter((row) => row.attendanceDate.getTime() === attendanceDate.getTime())
+      .map((row) => [row.studentId, row.status])
+  );
+  const weeklyManualTalentByStudentId = new Map<string, number>();
+  snapshot.talentTransactions.forEach((row) => {
+    if (
+      row.reason === TalentTransactionReason.MANUAL_ADJUST &&
+      row.transactedAt >= attendanceDate &&
+      row.transactedAt < nextSundayDate
+    ) {
+      weeklyManualTalentByStudentId.set(
+        row.studentId,
+        (weeklyManualTalentByStudentId.get(row.studentId) ?? 0) + row.amount
+      );
+    }
   });
 
-  const attendanceRows = await prisma.attendance.findMany({
-    where: {
-      attendanceDate,
-    },
-    select: {
-      studentId: true,
-      status: true,
-    },
-  });
+  const isInScope = (studentId: string): boolean => {
+    const classInfo = classInfoByStudentId.get(studentId);
 
-  const attendanceStatusByStudentId = new Map(attendanceRows.map((row) => [row.studentId, row.status]));
+    if (scope.kind === 'all') {
+      return true;
+    }
+    if (scope.kind === 'unassigned') {
+      return !classInfo;
+    }
+    return classInfo?.classId === scope.classId;
+  };
 
-  const weeklyManualTalentSums = await prisma.talentTransaction.groupBy({
-    by: ['studentId'],
-    where: {
-      reason: TalentTransactionReason.MANUAL_ADJUST,
-      transactedAt: {
-        gte: attendanceDate,
-        lt: nextSundayDate,
-      },
-    },
-    _sum: {
-      amount: true,
-    },
-  });
-
-  const weeklyManualTalentByStudentId = new Map(
-    weeklyManualTalentSums.map((row) => [row.studentId, row._sum.amount ?? 0]),
+  const studentsForTable = sortStudentsByGradeDescThenName(
+    snapshot.students
+      .filter((student) => isInScope(student.id))
+      .map<StudentRow>((student) => ({
+        id: student.id,
+        name: student.name,
+        gender: student.gender,
+        birthDate: student.birthDate,
+        currentTalent: student.currentTalent,
+        weeklyExtraTalent: weeklyManualTalentByStudentId.get(student.id) ?? 0,
+        gradeLabel: getGradeLabelByBirthDateInKst(student.birthDate),
+        attendanceStatus: attendanceStatusByStudentId.get(student.id) ?? AttendanceStatus.ABSENT,
+        className: classInfoByStudentId.get(student.id)?.className ?? null,
+        isNewFriend: student.isNewFriend,
+      }))
   );
 
-  const studentRows: StudentRow[] = students
-    .map((student) => ({
-      ...student,
-      gradeLabel: getGradeLabelByBirthDateInKst(student.birthDate),
-      attendanceStatus: attendanceStatusByStudentId.get(student.id) ?? AttendanceStatus.ABSENT,
-      weeklyExtraTalent: weeklyManualTalentByStudentId.get(student.id) ?? 0,
+  const newFriends = snapshot.students
+    .filter((student) => student.isNewFriend && isInScope(student.id))
+    .map<NewFriendRow>((student) => ({
+      id: student.id,
+      name: student.name,
+      className: classInfoByStudentId.get(student.id)?.className ?? null,
+      firstVisitDate: student.firstVisitDate,
+      presentCount: countPresentSince(snapshot.attendances, student.id, student.firstVisitDate),
     }))
-    .sort((a, b) => a.name.localeCompare(b.name, 'ko-KR'));
+    .sort((a, b) => b.presentCount - a.presentCount || a.name.localeCompare(b.name, 'ko-KR'));
 
-  const sortedStudentRows = sortStudentsByGradeDescThenName(studentRows);
-  const filteredStudents = filterStudentsByTab(sortedStudentRows, selectedTab);
-  const studentsForTable =
-    selectedTab === 'this_week'
-      ? filteredStudents.filter((student) => student.attendanceStatus === AttendanceStatus.PRESENT)
-      : filteredStudents;
-
-  const talentLogs: TalentLogRow[] = await prisma.talentTransaction.findMany({
-    where: {
-      reason: TalentTransactionReason.MANUAL_ADJUST,
-      transactedAt: {
-        gte: attendanceDate,
-        lt: nextSundayDate,
-      },
-    },
-    orderBy: { transactedAt: 'desc' },
-    take: 40,
-    select: {
-      id: true,
-      amount: true,
-      transactedAt: true,
-      student: {
-        select: {
-          name: true,
-        },
-      },
-      teacher: {
-        select: {
-          name: true,
-          email: true,
-        },
-      },
-    },
-  });
+  const unassignedCount = snapshot.students.filter((student) => !classInfoByStudentId.has(student.id)).length;
 
   return {
+    scope,
+    schoolYear,
+    classGroups,
+    unassignedCount,
     studentsForTable,
-    talentLogs,
+    newFriends,
+    talentLogs: getWeeklyTalentLogs(snapshot, attendanceDate, nextSundayDate),
   };
 }
 
-export function getAttendancePeriodInfo(baseDate: Date = new Date()): {
-  attendanceDate: Date;
-  nextSundayDate: Date;
-} {
-  const attendanceDate = getCurrentSundayKstDate(baseDate);
-  const nextSundayDate = getNextSundayKstDate(attendanceDate);
-
-  return {
-    attendanceDate,
-    nextSundayDate,
-  };
-}
-
+/**
+ * 수동 달란트 조정을 반영한다.
+ */
 export async function updateStudentTalent(
   studentId: string,
   amount: number,
   teacherId: string,
   attendanceDate: Date,
-  nextSundayDate: Date,
+  nextSundayDate: Date
 ): Promise<{
   studentId: string;
   studentName: string;
   currentTalent: number;
   weeklyExtraTalent: number;
-  transaction: {
-    id: string;
-    amount: number;
-    transactedAt: Date;
-  };
+  transaction: { id: string; amount: number; transactedAt: Date };
 }> {
-  return runSerializableTransactionWithRetry(() =>
-    prisma.$transaction(
-      async (tx) => {
-        const updatedStudent = await tx.student.update({
-          where: { id: studentId },
-          data: {
-            currentTalent: {
-              increment: amount,
-            },
-          },
-          select: {
-            id: true,
-            name: true,
-            currentTalent: true,
-          },
-        });
+  const updatedResult = await adjustStudentTalent({
+    studentId,
+    amount,
+    teacherId,
+    weekStartDate: attendanceDate,
+    nextWeekStartDate: nextSundayDate,
+  });
 
-        const createdTransaction = await tx.talentTransaction.create({
-          data: {
-            studentId,
-            teacherId,
-            reason: TalentTransactionReason.MANUAL_ADJUST,
-            amount,
-          },
-          select: {
-            id: true,
-            amount: true,
-            transactedAt: true,
-          },
-        });
-
-        const weeklyExtraTalentSummary = await tx.talentTransaction.aggregate({
-          where: {
-            studentId,
-            reason: TalentTransactionReason.MANUAL_ADJUST,
-            transactedAt: {
-              gte: attendanceDate,
-              lt: nextSundayDate,
-            },
-          },
-          _sum: {
-            amount: true,
-          },
-        });
-
-        return {
-          studentId: updatedStudent.id,
-          studentName: updatedStudent.name,
-          currentTalent: updatedStudent.currentTalent,
-          weeklyExtraTalent: weeklyExtraTalentSummary._sum.amount ?? 0,
-          transaction: createdTransaction,
-        };
-      },
-      {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-      },
-    ),
-  );
+  return {
+    studentId: updatedResult.student.id,
+    studentName: updatedResult.student.name,
+    currentTalent: updatedResult.student.currentTalent,
+    weeklyExtraTalent: updatedResult.weeklyExtraTalent,
+    transaction: {
+      id: updatedResult.transaction.id,
+      amount: updatedResult.transaction.amount,
+      transactedAt: updatedResult.transaction.transactedAt,
+    },
+  };
 }
 
-export async function updateAttendanceWithExpectedStatus(
+/**
+ * 기대 상태가 맞을 때만 출석 상태를 바꾼다(다른 교사가 먼저 바꿨으면 stale_state).
+ */
+export function updateAttendanceWithExpectedStatus(
   studentId: string,
   attendanceDate: Date,
   expectedCurrentStatus: AttendanceStatus,
   nextStatus: AttendanceStatus,
-  teacherId: string,
+  teacherId: string
 ): Promise<
-  | {
-      result: 'updated';
-      nextStatus: AttendanceStatus;
-      currentTalent: number;
-      talentDelta: number;
-    }
-  | {
-      result: 'stale_state';
-    }
+  | { result: 'updated'; nextStatus: AttendanceStatus; currentTalent: number; talentDelta: number }
+  | { result: 'stale_state' }
 > {
-  return runSerializableTransactionWithRetry(() =>
-    prisma.$transaction(
-      async (tx) => {
-        const existingAttendance = await tx.attendance.findUnique({
-          where: {
-            studentId_attendanceDate: {
-              studentId,
-              attendanceDate,
-            },
-          },
-        });
-
-        const currentStatus = existingAttendance?.status ?? AttendanceStatus.ABSENT;
-        if (currentStatus !== expectedCurrentStatus || currentStatus === nextStatus) {
-          return { result: 'stale_state' as const };
-        }
-
-        let talentDelta = 0;
-
-        if (!existingAttendance) {
-          await tx.attendance.create({
-            data: {
-              studentId,
-              attendanceDate,
-              status: nextStatus,
-            },
-          });
-        } else {
-          await tx.attendance.update({
-            where: {
-              studentId_attendanceDate: {
-                studentId,
-                attendanceDate,
-              },
-            },
-            data: {
-              status: nextStatus,
-            },
-          });
-        }
-
-        if (currentStatus === AttendanceStatus.ABSENT && nextStatus === AttendanceStatus.PRESENT) {
-          talentDelta = 1;
-        } else if (currentStatus === AttendanceStatus.PRESENT && nextStatus === AttendanceStatus.ABSENT) {
-          talentDelta = -1;
-        }
-
-        let currentTalent = 0;
-
-        if (talentDelta !== 0) {
-          const updatedStudent = await tx.student.update({
-            where: { id: studentId },
-            data: {
-              currentTalent: {
-                increment: talentDelta,
-              },
-            },
-            select: {
-              currentTalent: true,
-            },
-          });
-          currentTalent = updatedStudent.currentTalent;
-
-          await tx.talentTransaction.create({
-            data: {
-              studentId,
-              teacherId,
-              reason: TalentTransactionReason.ATTENDANCE,
-              amount: talentDelta,
-            },
-          });
-        } else {
-          const currentStudent = await tx.student.findUnique({
-            where: { id: studentId },
-            select: {
-              currentTalent: true,
-            },
-          });
-          currentTalent = currentStudent?.currentTalent ?? 0;
-        }
-
-        return {
-          result: 'updated' as const,
-          nextStatus,
-          currentTalent,
-          talentDelta,
-        };
-      },
-      {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-      },
-    ),
-  );
-}
-
-function isRetryableSerializableError(error: unknown): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2034';
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
+  return setAttendanceStatusIfExpected({
+    studentId,
+    attendanceDate,
+    expectedCurrentStatus,
+    nextStatus,
+    teacherId,
+    schoolYear: getSchoolYearInKst(attendanceDate),
   });
 }
 
-async function runSerializableTransactionWithRetry<T>(
-  operation: () => Promise<T>,
-  retryMaxCount: number = SERIALIZABLE_RETRY_MAX_COUNT,
-): Promise<T> {
-  let retryCount = 0;
+/**
+ * 금주 수동 달란트 조정 기록을 최신순으로 만든다. 삭제된 교사는 null로 표시한다.
+ */
+function getWeeklyTalentLogs(snapshot: StoreSnapshot, attendanceDate: Date, nextSundayDate: Date): TalentLogRow[] {
+  const studentNameById = new Map(snapshot.students.map((student) => [student.id, student.name]));
+  const teacherById = new Map(snapshot.teachers.map((teacher) => [teacher.id, teacher]));
 
-  while (true) {
-    try {
-      return await operation();
-    } catch (error) {
-      if (!isRetryableSerializableError(error) || retryCount >= retryMaxCount) {
-        throw error;
-      }
+  // 시트 행 순서는 입력 순서이므로 먼저 뒤집어, 같은 시각이면 나중에 기록한 것이 앞에 오게 한다.
+  return [...snapshot.talentTransactions]
+    .reverse()
+    .filter(
+      (row) =>
+        row.reason === TalentTransactionReason.MANUAL_ADJUST &&
+        row.transactedAt >= attendanceDate &&
+        row.transactedAt < nextSundayDate &&
+        studentNameById.has(row.studentId)
+    )
+    .sort((a, b) => b.transactedAt.getTime() - a.transactedAt.getTime())
+    .slice(0, TALENT_LOG_LIMIT)
+    .map((row) => {
+      const teacher = row.teacherId ? teacherById.get(row.teacherId) : undefined;
 
-      retryCount += 1;
-      await delay(SERIALIZABLE_RETRY_DELAY_MS * retryCount);
-    }
-  }
-}
-
-function getKoreanWeekdayIndex(date: Date): number {
-  const shortWeekdayName = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Seoul',
-    weekday: 'short',
-  }).format(date);
-
-  return KOREAN_WEEKDAY_INDEX_BY_SHORT_NAME[shortWeekdayName] ?? 0;
-}
-
-function getCurrentSundayKstDate(baseDate: Date = new Date()): Date {
-  const todayKoreanYmd = formatDateToKoreanYmd(baseDate);
-  const todayKstMidnight = new Date(`${todayKoreanYmd}T00:00:00+09:00`);
-  const weekdayIndex = getKoreanWeekdayIndex(baseDate);
-  const currentSunday = new Date(todayKstMidnight);
-  currentSunday.setUTCDate(currentSunday.getUTCDate() - weekdayIndex);
-  return currentSunday;
-}
-
-function getNextSundayKstDate(currentSundayKstDate: Date): Date {
-  const nextSunday = new Date(currentSundayKstDate);
-  nextSunday.setUTCDate(nextSunday.getUTCDate() + 7);
-  return nextSunday;
+      return {
+        id: row.id,
+        amount: row.amount,
+        transactedAt: row.transactedAt,
+        student: { name: studentNameById.get(row.studentId) ?? '' },
+        teacher: teacher ? { name: teacher.name, email: teacher.email } : null,
+      };
+    });
 }
 
 /**
- * 예배 일정 기준 일요일을 반환한다.
- * 일요일은 당일을, 월~토는 다음 일요일을 기준으로 사용한다.
+ * 이름 오름차순, 이름 없는 교사는 뒤로 보내는 비교 함수.
+ */
+function compareTeachersByNameNullsLast(a: { name: string | null }, b: { name: string | null }): number {
+  if (a.name === b.name) {
+    return 0;
+  }
+  if (a.name === null) {
+    return 1;
+  }
+  if (b.name === null) {
+    return -1;
+  }
+  return a.name.localeCompare(b.name, 'ko-KR');
+}
+
+/**
+ * 예배 일정 기준 일요일을 반환한다. 일요일은 당일을, 월~토는 다음 일요일을 기준으로 사용한다.
  */
 function getWorshipWeekSundayKstDate(baseDate: Date = new Date()): Date {
-  const currentSunday = getCurrentSundayKstDate(baseDate);
-  const weekdayIndex = getKoreanWeekdayIndex(baseDate);
-
-  if (weekdayIndex === 0) {
-    return currentSunday;
-  }
-
-  return getNextSundayKstDate(currentSunday);
+  const currentSunday = getSundayOfWeekInKst(baseDate);
+  return getKoreanWeekdayIndex(baseDate) === 0 ? currentSunday : addWeeksToSunday(currentSunday, 1);
 }
 
-function formatDateToMmDd(dateValue: Date): string {
-  const ymd = formatDateToKoreanYmd(dateValue);
-  return ymd.slice(5);
-}
-
-function getPreviousSundayByWeeks(currentSundayKstDate: Date, weeksAgo: number): Date {
-  const targetSunday = new Date(currentSundayKstDate);
-  targetSunday.setUTCDate(targetSunday.getUTCDate() - weeksAgo * 7);
-  return targetSunday;
-}
-
-function getWeeklySundaySeriesForLastThreeMonths(currentSundayKstDate: Date): Date[] {
-  const series: Date[] = [];
-  for (let weeksAgo = 12; weeksAgo >= 0; weeksAgo -= 1) {
-    series.push(getPreviousSundayByWeeks(currentSundayKstDate, weeksAgo));
-  }
-  return series;
-}
-
-function getLastSundayOfMonthKst(year: number, month: number): Date {
-  const lastDayOfMonth = new Date(Date.UTC(year, month, 0));
-  const weekdayName = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Seoul',
-    weekday: 'short',
-  }).format(lastDayOfMonth);
-  const weekdayIndex = KOREAN_WEEKDAY_INDEX_BY_SHORT_NAME[weekdayName] ?? 0;
-
-  const lastSunday = new Date(lastDayOfMonth);
-  lastSunday.setUTCDate(lastSunday.getUTCDate() - weekdayIndex);
-  return lastSunday;
-}
-
+/**
+ * 분기 마지막 일요일 기준으로 현재 분기를 정한다.
+ */
 function getCurrentQuarterByLastSunday(today: Date): 1 | 2 | 3 | 4 {
   const currentYear = Number(formatDateToKoreanYmd(today).slice(0, 4));
   const quarterEndMonths = [3, 6, 9, 12] as const;
 
   for (let index = 0; index < quarterEndMonths.length; index += 1) {
-    const quarterEnd = getLastSundayOfMonthKst(currentYear, quarterEndMonths[index]);
-    if (today <= quarterEnd) {
+    if (today <= getLastSundayOfMonthKst(currentYear, quarterEndMonths[index])) {
       return (index + 1) as 1 | 2 | 3 | 4;
     }
   }
@@ -770,50 +519,38 @@ function getCurrentQuarterByLastSunday(today: Date): 1 | 2 | 3 | 4 {
   return 4;
 }
 
+/**
+ * 분기의 시작·끝 월을 반환한다.
+ */
 function getQuarterMonthRange(quarter: 1 | 2 | 3 | 4): [number, number] {
-  if (quarter === 1) {
-    return [1, 3];
-  }
-  if (quarter === 2) {
-    return [4, 6];
-  }
-  if (quarter === 3) {
-    return [7, 9];
-  }
-  return [10, 12];
+  return [
+    [1, 3],
+    [4, 6],
+    [7, 9],
+    [10, 12],
+  ][quarter - 1] as [number, number];
 }
 
+/**
+ * 분기의 끝 월을 반환한다.
+ */
 function getQuarterEndMonth(quarter: 1 | 2 | 3 | 4): 3 | 6 | 9 | 12 {
-  if (quarter === 1) {
-    return 3;
-  }
-  if (quarter === 2) {
-    return 6;
-  }
-  if (quarter === 3) {
-    return 9;
-  }
-  return 12;
+  return ([3, 6, 9, 12] as const)[quarter - 1];
 }
 
-function sortBirthdayStudents(students: BirthdayStudentRow[]): BirthdayStudentRow[] {
-  return sortStudentsByGradeDescThenName(students);
-}
-
-function filterStudentsByTab(students: StudentRow[], selectedTab: AttendanceTabKey): StudentRow[] {
-  if (selectedTab === 'all' || selectedTab === 'this_week') {
-    return students;
-  }
-
-  const gradeLabelByTab: Record<Exclude<AttendanceTabKey, 'all' | 'this_week'>, GradeLabel> = {
-    grade_6: '6\uD559\uB144',
-    grade_5: '5\uD559\uB144',
-    grade_4: '4\uD559\uB144',
-    grade_3: '3\uD559\uB144',
-    grade_2: '2\uD559\uB144',
-    grade_1: '1\uD559\uB144',
-    kindergarten: '\uC720\uC544\uBD80',
-  };
-
-  return students.filter((student) => student.gradeLabel === gradeLabelByTab[selectedTab]);
+/**
+ * 학생이 현재 학년도에 배정된 반 id를 반환한다(없으면 null).
+ */
+export function getStudentClassId(
+  snapshot: Pick<StoreSnapshot, 'enrollments'>,
+  studentId: string,
+  schoolYear: number
+): string | null {
+  return (
+    findActiveEnrollment(
+      snapshot.enrollments.map((record) => ({ record })),
+      studentId,
+      schoolYear
+    )?.record.classId ?? null
+  );
 }

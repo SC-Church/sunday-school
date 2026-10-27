@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 
 import { requireApprovedTeacher } from '@/lib/api-session';
-import { prisma } from '@/lib/prisma';
 import { toFieldErrorMap } from '@/lib/validation/student';
 import { type TeacherUpdatePayload, parseTeacherUpdateInput } from '@/lib/validation/teacher';
+import { updateTeacherProfile } from '@/server/db/repository';
 
 type RouteContext = {
   params: Promise<{
@@ -56,16 +56,12 @@ export async function PATCH(request: Request, context: RouteContext) {
   }
 
   try {
-    await prisma.teacher.update({
-      where: { id: teacherId },
-      data: {
-        name: teacherInput.name,
-        phone: teacherInput.phone || null,
-        birthDate,
-        grade: teacherInput.grade ?? null,
-        // 활성 상태는 관리자만 변경할 수 있어 일반 교사 요청에서는 필드를 건드리지 않는다.
-        ...(guardResult.isAdmin ? { isActive: Boolean(teacherInput.is_active) } : {}),
-      },
+    await updateTeacherProfile(teacherId, {
+      name: teacherInput.name,
+      phone: teacherInput.phone || null,
+      birthDate,
+      // 활성 상태는 관리자만 변경할 수 있어 일반 교사 요청에서는 필드를 건드리지 않는다.
+      ...(guardResult.isAdmin ? { isActive: Boolean(teacherInput.is_active) } : {}),
     });
   } catch {
     return NextResponse.json({ message: 'server_error' }, { status: 500 });

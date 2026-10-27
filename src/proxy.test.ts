@@ -55,13 +55,26 @@ describe('proxy - 미로그인', () => {
     expect(redirectTarget(response)).toBe('/login?callback_url=%2Fattendance%3Fattendance_tab%3Dthis_week');
   });
 
-  it('공개 경로(/, /login)는 통과시킨다', async () => {
+  it('공개 경로(/, /login, /signup)는 통과시킨다', async () => {
     expect(redirectTarget(await proxy(request('/')))).toBeNull();
     expect(redirectTarget(await proxy(request('/login')))).toBeNull();
+    expect(redirectTarget(await proxy(request('/signup')))).toBeNull();
+  });
+
+  it('회원가입 API는 로그인 없이 호출할 수 있다', async () => {
+    expect(redirectTarget(await proxy(request('/api/signup')))).toBeNull();
+    expect(getTokenMock).not.toHaveBeenCalled();
+  });
+
+  it('회원가입 API 외의 API는 로그인 없이 통과시키지 않는다', async () => {
+    expect(redirectTarget(await proxy(request('/api/signup-management')))).toBe(
+      '/login?callback_url=%2Fapi%2Fsignup-management'
+    );
+    expect(redirectTarget(await proxy(request('/api/students')))).toBe('/login?callback_url=%2Fapi%2Fstudents');
   });
 
   it('인증 API 경로는 검사하지 않는다', async () => {
-    expect(redirectTarget(await proxy(request('/api/auth/callback/google')))).toBeNull();
+    expect(redirectTarget(await proxy(request('/api/auth/callback/credentials')))).toBeNull();
     expect(getTokenMock).not.toHaveBeenCalled();
   });
 
@@ -127,10 +140,23 @@ describe('proxy - 승인 상태 분기', () => {
     expect(redirectTarget(await proxy(request('/pending')))).toBe('/');
   });
 
-  it('승인된 교사가 로그인 페이지에 접근하면 홈으로 보낸다', async () => {
+  it('승인된 교사가 로그인/회원가입 페이지에 접근하면 홈으로 보낸다', async () => {
     getTokenMock.mockResolvedValue({ approvalStatus: 'APPROVED', role: 'TEACHER' });
 
     expect(redirectTarget(await proxy(request('/login')))).toBe('/');
+    expect(redirectTarget(await proxy(request('/signup')))).toBe('/');
+  });
+
+  it('승인 대기 교사가 회원가입 페이지에 접근하면 /pending으로 보낸다', async () => {
+    getTokenMock.mockResolvedValue({ approvalStatus: 'PENDING', role: 'TEACHER' });
+
+    expect(redirectTarget(await proxy(request('/signup')))).toBe('/pending');
+  });
+
+  it('삭제되어 승인 정보가 지워진 세션은 보호된 경로에 들어갈 수 없다', async () => {
+    getTokenMock.mockResolvedValue({ email: 'deleted@x.com' });
+
+    expect(redirectTarget(await proxy(request('/students')))).toBe('/pending');
   });
 });
 
@@ -139,6 +165,33 @@ describe('proxy - 관리자 전용 경로', () => {
     getTokenMock.mockResolvedValue({ approvalStatus: 'APPROVED', role: 'TEACHER' });
 
     expect(redirectTarget(await proxy(request('/signup-management')))).toBe('/');
+  });
+
+  it('일반 교사의 조직 관리·학년 진급·일괄 등록 화면 접근을 차단한다', async () => {
+    getTokenMock.mockResolvedValue({ approvalStatus: 'APPROVED', role: 'TEACHER' });
+
+    expect(redirectTarget(await proxy(request('/admin/organization')))).toBe('/');
+    expect(redirectTarget(await proxy(request('/admin/promotion')))).toBe('/');
+    expect(redirectTarget(await proxy(request('/students/import')))).toBe('/');
+    // 접두사만 같은 경로(/administrator, /students/importer)는 관리자 전용이 아니다
+    expect(redirectTarget(await proxy(request('/students/importer')))).toBeNull();
+  });
+
+  it('일반 교사의 관리자 API 호출은 403 JSON으로 거절한다', async () => {
+    getTokenMock.mockResolvedValue({ approvalStatus: 'APPROVED', role: 'TEACHER' });
+
+    const response = await proxy(request('/api/admin/classes'));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ message: 'forbidden' });
+
+    expect((await proxy(request('/api/students/import'))).status).toBe(403);
+  });
+
+  it('관리자는 조직 관리와 관리자 API에 접근할 수 있다', async () => {
+    getTokenMock.mockResolvedValue({ approvalStatus: 'APPROVED', role: 'ADMIN' });
+
+    expect(redirectTarget(await proxy(request('/admin/organization')))).toBeNull();
+    expect((await proxy(request('/api/admin/classes'))).status).toBe(200);
   });
 
   it('관리자는 /signup-management에 접근할 수 있다', async () => {

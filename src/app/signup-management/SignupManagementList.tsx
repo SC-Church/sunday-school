@@ -28,7 +28,12 @@ type SignupManagementListProps = {
   initialProcessedTeachers: ProcessedTeacherRow[];
 };
 
-type SignupManagementAction = 'approve' | 'reject' | 'toggle_role' | 'delete';
+type SignupManagementAction = 'approve' | 'reject' | 'toggle_role' | 'delete' | 'reset_password';
+
+type IssuedTemporaryPassword = {
+  teacherLabel: string;
+  temporaryPassword: string;
+};
 
 /**
  * 날짜 문자열을 한국 시간 표시용으로 포맷한다.
@@ -54,6 +59,8 @@ export default function SignupManagementList({
   const [processedTeachers, setProcessedTeachers] = useState(initialProcessedTeachers);
   const [pendingActionTeacherId, setPendingActionTeacherId] = useState<string | null>(null);
   const [deleteTargetTeacherId, setDeleteTargetTeacherId] = useState<string | null>(null);
+  const [resetTargetTeacher, setResetTargetTeacher] = useState<ProcessedTeacherRow | null>(null);
+  const [issuedPassword, setIssuedPassword] = useState<IssuedTemporaryPassword | null>(null);
 
   /**
    * 가입 관리 API를 호출하고 실패 시 토스트를 표시한다.
@@ -164,6 +171,58 @@ export default function SignupManagementList({
     showToast({ variant: 'success', message: '계정을 삭제했습니다.' });
   }
 
+  /**
+   * 교사 비밀번호를 임시 비밀번호로 초기화하고, 발급된 값을 한 번만 보여 준다.
+   */
+  async function handleResetPassword(teacher: ProcessedTeacherRow) {
+    setResetTargetTeacher(null);
+
+    const payload = await requestSignupAction('reset_password', teacher.id);
+    const temporaryPassword = payload?.temporary_password;
+
+    if (typeof temporaryPassword !== 'string') {
+      return;
+    }
+
+    setIssuedPassword({ teacherLabel: teacher.name ?? teacher.email, temporaryPassword });
+  }
+
+  /**
+   * 발급된 임시 비밀번호를 클립보드에 복사한다.
+   */
+  async function handleCopyIssuedPassword() {
+    if (!issuedPassword) {
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(issuedPassword.temporaryPassword);
+      showToast({ variant: 'success', message: '임시 비밀번호를 복사했습니다.' });
+    } catch {
+      showToast({ variant: 'error', message: '복사하지 못했습니다.', description: '직접 선택해 복사해 주세요.' });
+    }
+  }
+
+  const resetModalButtons: ActionModalButton[] = [
+    { label: '취소', tone: 'neutral', variant: 'outline', autoClose: true },
+    {
+      label: '초기화',
+      tone: 'danger',
+      variant: 'solid',
+      disabled: pendingActionTeacherId !== null,
+      onClick: () => {
+        if (resetTargetTeacher) {
+          void handleResetPassword(resetTargetTeacher);
+        }
+      },
+    },
+  ];
+
+  const issuedPasswordModalButtons: ActionModalButton[] = [
+    { label: '복사', tone: 'neutral', variant: 'outline', onClick: () => void handleCopyIssuedPassword() },
+    { label: '확인', tone: 'primary', variant: 'solid', autoClose: true },
+  ];
+
   const deleteModalButtons: ActionModalButton[] = [
     { label: '취소', tone: 'neutral', variant: 'outline', autoClose: true },
     {
@@ -235,7 +294,7 @@ export default function SignupManagementList({
       <section className="mx-auto mt-6 w-full max-w-4xl rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 sm:p-8">
         <h2 className="text-xl font-bold text-[var(--color-text)]">처리된 가입 목록 / 권한 관리</h2>
         <p className="mt-2 text-sm text-[var(--color-muted)]">
-          승인된 계정은 역할 변경과 삭제가 가능하며, 거절된 계정은 상태만 확인할 수 있습니다.
+          승인된 계정은 역할 변경·비밀번호 초기화·삭제가 가능하며, 거절된 계정은 상태 확인과 삭제만 가능합니다.
         </p>
 
         <div className="mt-6 space-y-3">
@@ -286,6 +345,15 @@ export default function SignupManagementList({
                           >
                             {isAdmin ? '관리자 해제' : '관리자 부여'}
                           </button>
+
+                          <button
+                            type="button"
+                            disabled={isMe || isBusy}
+                            onClick={() => setResetTargetTeacher(teacher)}
+                            className="btn btn-secondary btn-sm h-8"
+                          >
+                            비밀번호 초기화
+                          </button>
                         </>
                       ) : (
                         <span className="inline-flex w-fit items-center rounded-full border border-[var(--color-danger)] bg-[var(--color-danger-soft)] px-2.5 py-1 text-xs font-medium text-[var(--color-danger)]">
@@ -309,6 +377,22 @@ export default function SignupManagementList({
           )}
         </div>
       </section>
+
+      <ActionModal
+        isOpen={resetTargetTeacher !== null}
+        title="비밀번호 초기화"
+        message={`${resetTargetTeacher?.name ?? resetTargetTeacher?.email ?? ''} 님의 비밀번호를 임시 비밀번호로 바꿉니다.\n기존 비밀번호로는 더 이상 로그인할 수 없습니다.`}
+        buttons={resetModalButtons}
+        onClose={() => setResetTargetTeacher(null)}
+      />
+
+      <ActionModal
+        isOpen={issuedPassword !== null}
+        title="임시 비밀번호 발급"
+        message={`${issuedPassword?.teacherLabel ?? ''} 님의 임시 비밀번호:\n\n${issuedPassword?.temporaryPassword ?? ''}\n\n이 창을 닫으면 다시 볼 수 없습니다. 교사에게 직접 전달하고, 로그인 후 [교사 정보 > 수정]에서 비밀번호를 바꾸도록 안내해 주세요.`}
+        buttons={issuedPasswordModalButtons}
+        onClose={() => setIssuedPassword(null)}
+      />
 
       <ActionModal
         isOpen={deleteTargetTeacherId !== null}

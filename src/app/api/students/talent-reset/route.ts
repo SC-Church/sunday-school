@@ -3,7 +3,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 
 import { authOptions } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
+import { resetAllTalent } from '@/server/db/repository';
 import { TEACHER_APPROVAL_STATUS, TEACHER_ROLE } from '@/types/teacher';
 
 /**
@@ -21,14 +21,7 @@ export async function POST() {
   }
 
   try {
-    await prisma.$transaction([
-      prisma.student.updateMany({
-        data: {
-          currentTalent: 0,
-        },
-      }),
-      prisma.talentTransaction.deleteMany({}),
-    ]);
+    await resetAllTalent();
   } catch {
     return NextResponse.json({ message: 'server_error' }, { status: 500 });
   }

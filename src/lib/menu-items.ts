@@ -4,10 +4,12 @@ import {
   faCalendarCheck,
   faCalendarDays,
   faChartLine,
+  faChartPie,
   faClipboardList,
   faFolderOpen,
   faGamepad,
   faSackDollar,
+  faSitemap,
   faUserGraduate,
   faUsersGear,
 } from '@fortawesome/free-solid-svg-icons';
@@ -23,6 +25,7 @@ export type MenuItem = {
 const COMMON_MENU_ITEMS: MenuItem[] = [
   { label: '대시보드', icon: faChartLine, url: '/dashboard' },
   { label: '출석 관리', icon: faCalendarCheck, url: '/attendance' },
+  { label: '출석 통계', icon: faChartPie, url: '/attendance/stats' },
   { label: '학생 관리', icon: faUserGraduate, url: '/students' },
   { label: '교사 정보', icon: faAddressBook, url: '/teachers' },
   { label: '연간 계획', icon: faCalendarDays, url: 'https://calendar.google.com/calendar/u/0/r' },
@@ -54,18 +57,17 @@ export const GUEST_MENU_ITEMS: MenuItem[] = [
   { label: '교사 정보', icon: faAddressBook, url: '/guest/teachers' },
 ];
 
-const ADMIN_ONLY_MENU_ITEM: MenuItem = {
-  label: '가입 관리',
-  icon: faUsersGear,
-  url: '/signup-management',
-};
+const ADMIN_ONLY_MENU_ITEMS: MenuItem[] = [
+  { label: '조직 관리', icon: faSitemap, url: '/admin/organization' },
+  { label: '가입 관리', icon: faUsersGear, url: '/signup-management' },
+];
 
 /**
  * 사용자 권한에 맞는 메뉴 목록을 반환한다.
  */
 export function getMenuItemsByRole(role: TeacherRole | undefined): MenuItem[] {
   if (role === 'ADMIN') {
-    return [...COMMON_MENU_ITEMS, ADMIN_ONLY_MENU_ITEM];
+    return [...COMMON_MENU_ITEMS, ...ADMIN_ONLY_MENU_ITEMS];
   }
 
   return COMMON_MENU_ITEMS;

@@ -1,4 +1,4 @@
-import type { StudentInput } from '@/app/students/StudentsView';
+import type { ClassFilterGroup, StudentInput } from '@/app/students/StudentsView';
 import type { TeacherRow } from '@/app/teachers/TeachersView';
 import { formatDateToKoreanYmd } from '@/utils/date';
 import { getSchoolYearInKst } from '@/utils/grade';
@@ -92,6 +92,11 @@ export function getGuestStudents(): StudentInput[] {
       phone: '010-1234-5678',
       currentTalent: 42,
       guardianContact: { name: '김성실', relationship: 'FATHER', phone: '010-1234-1111' },
+      classId: 'demo-class-6',
+      className: '6학년',
+      departmentName: '유년부',
+      isNewFriend: false,
+      note: null,
     },
     {
       id: 'demo-student-2',
@@ -102,6 +107,11 @@ export function getGuestStudents(): StudentInput[] {
       phone: null,
       currentTalent: 35,
       guardianContact: { name: '이온유', relationship: 'MOTHER', phone: '010-2345-2222' },
+      classId: 'demo-class-4',
+      className: '4학년',
+      departmentName: '유년부',
+      isNewFriend: false,
+      note: '견과류 알레르기',
     },
     {
       id: 'demo-student-3',
@@ -112,6 +122,11 @@ export function getGuestStudents(): StudentInput[] {
       phone: null,
       currentTalent: 28,
       guardianContact: { name: '박기쁨', relationship: 'MOTHER', phone: '010-3456-3333' },
+      classId: 'demo-class-4',
+      className: '4학년',
+      departmentName: '유년부',
+      isNewFriend: false,
+      note: null,
     },
     {
       id: 'demo-student-4',
@@ -122,6 +137,11 @@ export function getGuestStudents(): StudentInput[] {
       phone: null,
       currentTalent: 19,
       guardianContact: { name: '최평안', relationship: 'GRANDMOTHER', phone: '010-4567-4444' },
+      classId: 'demo-class-2',
+      className: '2학년',
+      departmentName: '유년부',
+      isNewFriend: false,
+      note: null,
     },
     {
       id: 'demo-student-5',
@@ -132,6 +152,11 @@ export function getGuestStudents(): StudentInput[] {
       phone: null,
       currentTalent: 24,
       guardianContact: { name: '정사랑', relationship: 'FATHER', phone: '010-5678-5555' },
+      classId: 'demo-class-1',
+      className: '1학년',
+      departmentName: '유년부',
+      isNewFriend: false,
+      note: null,
     },
     {
       id: 'demo-student-6',
@@ -142,6 +167,11 @@ export function getGuestStudents(): StudentInput[] {
       phone: null,
       currentTalent: 12,
       guardianContact: { name: '한소망', relationship: 'MOTHER', phone: '010-6789-6666' },
+      classId: 'demo-class-k',
+      className: '유아반',
+      departmentName: '유년부',
+      isNewFriend: true,
+      note: null,
     },
     {
       id: 'demo-student-7',
@@ -152,6 +182,38 @@ export function getGuestStudents(): StudentInput[] {
       phone: null,
       currentTalent: 58,
       guardianContact: { name: '오진실', relationship: 'FATHER', phone: '010-7890-7777' },
+      classId: 'demo-class-m1',
+      className: '중1',
+      departmentName: '청소년부',
+      isNewFriend: false,
+      note: null,
+    },
+  ];
+}
+
+/**
+ * 게스트 학생 관리 화면의 반 선택 칩에 쓸 데모 부서·반 목록을 만든다.
+ */
+export function getGuestClassGroups(): ClassFilterGroup[] {
+  const students = getGuestStudents();
+  const countByClassId = (classId: string) => students.filter((student) => student.classId === classId).length;
+
+  return [
+    {
+      departmentId: 'demo-dept-kids',
+      departmentName: '유년부',
+      classes: [
+        { id: 'demo-class-k', name: '유아반', studentCount: countByClassId('demo-class-k') },
+        { id: 'demo-class-1', name: '1학년', studentCount: countByClassId('demo-class-1') },
+        { id: 'demo-class-2', name: '2학년', studentCount: countByClassId('demo-class-2') },
+        { id: 'demo-class-4', name: '4학년', studentCount: countByClassId('demo-class-4') },
+        { id: 'demo-class-6', name: '6학년', studentCount: countByClassId('demo-class-6') },
+      ],
+    },
+    {
+      departmentId: 'demo-dept-youth',
+      departmentName: '청소년부',
+      classes: [{ id: 'demo-class-m1', name: '중1', studentCount: countByClassId('demo-class-m1') }],
     },
   ];
 }
@@ -167,7 +229,7 @@ export function getGuestTeachers(): TeacherRow[] {
       name: '김선교',
       phone: '010-1111-2222',
       birthDate: new Date('1988-03-14T00:00:00+09:00'),
-      grade: '6학년',
+      grade: '유년부 6학년',
       role: 'ADMIN',
       isActive: true,
     },
@@ -177,7 +239,7 @@ export function getGuestTeachers(): TeacherRow[] {
       name: '이믿음',
       phone: '010-2222-3333',
       birthDate: new Date('1993-08-02T00:00:00+09:00'),
-      grade: '4학년',
+      grade: '유년부 4학년',
       role: 'TEACHER',
       isActive: true,
     },
@@ -187,7 +249,7 @@ export function getGuestTeachers(): TeacherRow[] {
       name: '박소망',
       phone: '010-3333-4444',
       birthDate: new Date('1996-11-27T00:00:00+09:00'),
-      grade: '유아부',
+      grade: '유년부 유아반',
       role: 'TEACHER',
       isActive: true,
     },
@@ -197,7 +259,7 @@ export function getGuestTeachers(): TeacherRow[] {
       name: '정은혜',
       phone: null,
       birthDate: null,
-      grade: '2학년',
+      grade: '유년부 2학년',
       role: 'TEACHER',
       isActive: false,
     },

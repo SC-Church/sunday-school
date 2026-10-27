@@ -1,17 +1,24 @@
 import { NextResponse } from 'next/server';
 
 import { requireAdminTeacher } from '@/lib/api-session';
-import { prisma } from '@/lib/prisma';
+import { loginThrottle } from '@/lib/login-throttle';
+import { generateTemporaryPassword, hashPassword } from '@/lib/password';
+import {
+  deleteTeacher,
+  setTeacherPasswordHash,
+  updateTeacherApproval,
+  updateTeacherRole,
+} from '@/server/db/repository';
 import { TEACHER_APPROVAL_STATUS, TEACHER_ROLE } from '@/types/teacher';
 
 type SignupManagementRequestBody = {
-  action?: 'approve' | 'reject' | 'toggle_role' | 'delete';
+  action?: 'approve' | 'reject' | 'toggle_role' | 'delete' | 'reset_password';
   teacher_id?: string;
   next_role?: 'ADMIN' | 'TEACHER';
 };
 
 /**
- * 관리자 전용 가입 승인/거절/권한 변경/삭제를 처리한다.
+ * 관리자 전용 가입 승인/거절/권한 변경/삭제/비밀번호 초기화를 처리한다.
  */
 export async function POST(request: Request) {
   const guardResult = await requireAdminTeacher();
@@ -39,22 +46,7 @@ export async function POST(request: Request) {
       body.action === 'approve' ? TEACHER_APPROVAL_STATUS.APPROVED : TEACHER_APPROVAL_STATUS.REJECTED;
 
     try {
-      const updatedTeacher = await prisma.teacher.update({
-        where: { id: teacherId },
-        data: {
-          approvalStatus,
-          approvalProcessedAt: new Date(),
-        },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          approvalStatus: true,
-          role: true,
-          approvalProcessedAt: true,
-          updatedAt: true,
-        },
-      });
+      const updatedTeacher = await updateTeacherApproval(teacherId, approvalStatus);
 
       return NextResponse.json({
         message: 'ok',
@@ -84,10 +76,7 @@ export async function POST(request: Request) {
     }
 
     try {
-      await prisma.teacher.update({
-        where: { id: teacherId },
-        data: { role: nextRole },
-      });
+      await updateTeacherRole(teacherId, nextRole);
     } catch {
       return NextResponse.json({ message: 'server_error' }, { status: 500 });
     }
@@ -101,14 +90,27 @@ export async function POST(request: Request) {
     }
 
     try {
-      await prisma.teacher.delete({
-        where: { id: teacherId },
-      });
+      await deleteTeacher(teacherId);
     } catch {
       return NextResponse.json({ message: 'server_error' }, { status: 500 });
     }
 
     return NextResponse.json({ message: 'ok', teacher_id: teacherId });
+  }
+
+  if (body.action === 'reset_password') {
+    // 임시 비밀번호는 응답으로 한 번만 돌려주고 저장하지 않는다(시트에는 해시만 남는다).
+    const temporaryPassword = generateTemporaryPassword();
+
+    try {
+      const updatedTeacher = await setTeacherPasswordHash(teacherId, await hashPassword(temporaryPassword));
+      // 비밀번호를 잊어 로그인 실패로 잠긴 경우에도 임시 비밀번호로 바로 들어올 수 있게 잠금을 푼다.
+      loginThrottle.reset(updatedTeacher.email.toLowerCase());
+    } catch {
+      return NextResponse.json({ message: 'server_error' }, { status: 500 });
+    }
+
+    return NextResponse.json({ message: 'ok', teacher_id: teacherId, temporary_password: temporaryPassword });
   }
 
   return NextResponse.json({ message: 'invalid_request' }, { status: 400 });

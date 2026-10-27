@@ -8,6 +8,7 @@ export type TeacherRow = {
   name: string | null;
   phone: string | null;
   birthDate: Date | null;
+  /** 담당 반 표시 문자열(예: 유년부 1반, 2반). 관리자가 조직 관리에서 지정한다. */
   grade: string | null;
   role: 'ADMIN' | 'TEACHER';
   isActive: boolean;
@@ -118,7 +119,7 @@ function TeacherCardList({
               <dd className="text-right text-[var(--color-text)]">
                 {teacher.birthDate ? formatDateToKoreanYmd(teacher.birthDate) : '-'}
               </dd>
-              <dt className="text-[var(--color-muted)]">담당 학년</dt>
+              <dt className="text-[var(--color-muted)]">담당 반</dt>
               <dd className="text-right text-[var(--color-text)]">{teacher.grade ?? '-'}</dd>
             </dl>
 
@@ -164,7 +165,7 @@ export default function TeachersView({ teachers, canManageAll, currentTeacherId 
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">이메일</th>
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">연락처</th>
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">생년월일</th>
-                <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">담당 학년</th>
+                <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">담당 반</th>
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">역할</th>
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">관리</th>
               </tr>
@@ -202,7 +203,7 @@ export default function TeachersView({ teachers, canManageAll, currentTeacherId 
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">이메일</th>
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">연락처</th>
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">생년월일</th>
-                <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">담당 학년</th>
+                <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">담당 반</th>
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">역할</th>
                 <th className="px-3 py-2 text-sm font-semibold text-[var(--color-text)]">관리</th>
               </tr>

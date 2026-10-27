@@ -1,17 +1,42 @@
 import type { NextAuthOptions } from 'next-auth';
-import GoogleProvider from 'next-auth/providers/google';
+import CredentialsProvider from 'next-auth/providers/credentials';
 
-import { prisma } from '@/lib/prisma';
-import { TEACHER_APPROVAL_STATUS, TEACHER_ROLE } from '@/types/teacher';
+import { LOGIN_LOCKED_ERROR, loginThrottle } from '@/lib/login-throttle';
+import { DUMMY_PASSWORD_HASH, verifyPassword } from '@/lib/password';
+import { normalizeEmail } from '@/lib/validation/auth';
+import { findTeacherByEmail, findTeacherByEmailFresh } from '@/server/db/repository';
 
 const TEACHER_SESSION_SYNC_INTERVAL_SECONDS = 60 * 5;
 const DEFAULT_TOKEN_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
-const parseAdminEmails = (): string[] =>
-  (process.env.ADMIN_EMAILS ?? '')
-    .split(',')
-    .map((email) => email.trim().toLowerCase())
-    .filter(Boolean);
+/**
+ * 이메일/비밀번호로 교사를 인증한다. 성공하면 세션에 담을 사용자 정보를, 실패하면 null을 반환한다.
+ * 승인 대기/거절 계정도 로그인은 되며, 이후 proxy가 상태 페이지로 보낸다.
+ */
+async function authorizeTeacher(credentials: Record<string, string> | undefined) {
+  const email = normalizeEmail(credentials?.email);
+  const password = typeof credentials?.password === 'string' ? credentials.password : '';
+
+  if (!email || !password) {
+    return null;
+  }
+
+  if (loginThrottle.isLocked(email)) {
+    throw new Error(LOGIN_LOCKED_ERROR);
+  }
+
+  const teacher = await findTeacherByEmailFresh(email);
+  // 계정이 없거나 비밀번호가 없는 계정도 같은 시간이 걸리도록 가짜 해시로 한 번 검증한다.
+  const isPasswordValid = await verifyPassword(password, teacher?.passwordHash ?? DUMMY_PASSWORD_HASH);
+
+  if (!teacher?.passwordHash || !isPasswordValid) {
+    loginThrottle.registerFailure(email);
+    return null;
+  }
+
+  loginThrottle.reset(email);
+  return { id: teacher.id, email: teacher.email, name: teacher.name };
+}
 
 export const authOptions: NextAuthOptions = {
   session: {
@@ -22,40 +47,17 @@ export const authOptions: NextAuthOptions = {
     maxAge: DEFAULT_TOKEN_MAX_AGE_SECONDS,
   },
   providers: [
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID ?? '',
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
+    CredentialsProvider({
+      id: 'credentials',
+      name: '이메일',
+      credentials: {
+        email: { label: '이메일', type: 'email' },
+        password: { label: '비밀번호', type: 'password' },
+      },
+      authorize: authorizeTeacher,
     }),
   ],
   callbacks: {
-    async signIn({ user }) {
-      if (!user.email) {
-        return false;
-      }
-
-      const email = user.email.toLowerCase();
-      const isAdmin = parseAdminEmails().includes(email);
-
-      await prisma.teacher.upsert({
-        where: { email },
-        create: {
-          email,
-          name: user.name ?? null,
-          role: isAdmin ? TEACHER_ROLE.ADMIN : TEACHER_ROLE.TEACHER,
-          approvalStatus: isAdmin ? TEACHER_APPROVAL_STATUS.APPROVED : TEACHER_APPROVAL_STATUS.PENDING,
-        },
-        update: {
-          ...(isAdmin
-            ? {
-                role: TEACHER_ROLE.ADMIN,
-                approvalStatus: TEACHER_APPROVAL_STATUS.APPROVED,
-              }
-            : {}),
-        },
-      });
-
-      return true;
-    },
     async jwt({ token, trigger, user }) {
       if (!token.email) {
         return token;
@@ -74,11 +76,13 @@ export const authOptions: NextAuthOptions = {
         return token;
       }
 
-      const teacher = await prisma.teacher.findUnique({
-        where: { email: token.email.toLowerCase() },
-      });
+      const teacher = await findTeacherByEmail(token.email);
 
       if (!teacher) {
+        // 삭제된 계정은 기존 승인 정보를 지워 보호된 화면에 더 이상 들어오지 못하게 한다.
+        delete token.teacherId;
+        delete token.role;
+        delete token.approvalStatus;
         return token;
       }
 

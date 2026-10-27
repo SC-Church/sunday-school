@@ -65,9 +65,9 @@ export default async function OpengraphImage() {
         }}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={logoDataUrl} width={260} height={260} alt="서광 주일학교 로고" />
+        <img src={logoDataUrl} width={260} height={260} alt="송촌장로교회 주일학교 로고" />
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={textLogoDataUrl} width={520} height={106} alt="서광 주일학교" />
+        <img src={textLogoDataUrl} width={520} height={106} alt="송촌장로교회 주일학교" />
       </div>
     </div>,
     size

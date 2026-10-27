@@ -2,11 +2,15 @@ import type { Metadata } from 'next';
 
 import { getServerSession } from 'next-auth';
 
+import { type ClassScope, parseClassScope } from '@/lib/attendance-display';
 import { authOptions } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
+import { buildClassGroups } from '@/server/attendance/service';
+import { getStoreSnapshot, withGuardians } from '@/server/db/repository';
+import { EnrollmentStatus } from '@/types/domain';
+import { getSchoolYearInKst } from '@/utils/grade';
 
 import StudentsResultToast from './StudentsResultToast';
-import StudentsView, { getSelectedGradeTab } from './StudentsView';
+import StudentsView, { type StudentInput } from './StudentsView';
 import TalentResetButton from './TalentResetButton';
 
 export const metadata: Metadata = {
@@ -15,37 +19,48 @@ export const metadata: Metadata = {
 
 type StudentsPageProps = {
   searchParams?: Promise<{
-    grade_tab?: string | string[];
+    class_id?: string | string[];
   }>;
 };
 
 /**
- * 학생 관리 페이지를 렌더링한다.
+ * 학생 관리 페이지를 렌더링한다. class_id가 없으면 전체(부서·반별 묶음)를 보여준다.
  */
 export default async function StudentsPage({ searchParams }: StudentsPageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : undefined;
-  const selectedGradeTab = getSelectedGradeTab(resolvedSearchParams?.grade_tab);
   const session = await getServerSession(authOptions);
   const isAdmin = session?.user?.role === 'ADMIN';
+  const selectedScope: ClassScope = parseClassScope(resolvedSearchParams?.class_id) ?? { kind: 'all' };
+  const snapshot = await getStoreSnapshot();
+  const schoolYear = getSchoolYearInKst();
+  const classGroups = buildClassGroups(snapshot, schoolYear, session?.user?.id ?? null);
+  const classById = new Map(snapshot.classes.map((classRecord) => [classRecord.id, classRecord]));
+  const departmentNameById = new Map(snapshot.departments.map((department) => [department.id, department.name]));
+  const activeClassIdByStudentId = new Map(
+    snapshot.enrollments
+      .filter((enrollment) => enrollment.schoolYear === schoolYear && enrollment.status === EnrollmentStatus.ACTIVE)
+      .map((enrollment) => [enrollment.studentId, enrollment.classId])
+  );
 
-  const students = await prisma.student.findMany({
-    orderBy: { name: 'asc' },
-    select: {
-      id: true,
-      name: true,
-      gender: true,
-      birthDate: true,
-      address: true,
-      phone: true,
-      currentTalent: true,
-      guardianContact: {
-        select: {
-          name: true,
-          relationship: true,
-          phone: true,
-        },
-      },
-    },
+  const students = withGuardians(snapshot).map<StudentInput>((student) => {
+    const classId = activeClassIdByStudentId.get(student.id) ?? null;
+    const classRecord = classId ? classById.get(classId) : undefined;
+
+    return {
+      id: student.id,
+      name: student.name,
+      gender: student.gender,
+      birthDate: student.birthDate,
+      address: student.address,
+      phone: student.phone,
+      currentTalent: student.currentTalent,
+      guardianContact: student.guardianContact,
+      classId: classRecord?.id ?? null,
+      className: classRecord?.name ?? null,
+      departmentName: classRecord ? (departmentNameById.get(classRecord.departmentId) ?? null) : null,
+      isNewFriend: student.isNewFriend,
+      note: student.note,
+    };
   });
 
   return (
@@ -53,7 +68,13 @@ export default async function StudentsPage({ searchParams }: StudentsPageProps) 
       <StudentsResultToast />
       <StudentsView
         students={students}
-        selectedGradeTab={selectedGradeTab}
+        classGroups={classGroups.map((group) => ({
+          departmentId: group.departmentId,
+          departmentName: group.departmentName,
+          classes: group.classes.map(({ id, name, studentCount }) => ({ id, name, studentCount })),
+        }))}
+        selectedScope={selectedScope}
+        schoolYear={schoolYear}
         isAdmin={isAdmin}
         canManage
         basePath="/students"

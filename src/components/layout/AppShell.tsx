@@ -19,6 +19,8 @@ type AppShellProps = {
   role?: TeacherRole;
   approvalStatus?: TeacherApprovalStatus;
   userDisplayName: string;
+  /** 관리자가 설정한 교회 이름. 없으면 기본 로고 이미지를 쓴다. */
+  churchName: string | null;
 };
 
 type ThemeMode = 'light' | 'dark';
@@ -85,7 +87,7 @@ function isActiveMenu(pathname: string, url: string): boolean {
 /**
  * 앱 공통 헤더와 반응형 메뉴 셸을 렌더링한다.
  */
-export default function AppShell({ children, role, approvalStatus, userDisplayName }: AppShellProps) {
+export default function AppShell({ children, role, approvalStatus, userDisplayName, churchName }: AppShellProps) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const themeMode = useSyncExternalStore(subscribeThemeMode, getThemeModeSnapshot, getThemeModeServerSnapshot);
   const isDarkMode = themeMode === 'dark';
@@ -139,23 +141,24 @@ export default function AppShell({ children, role, approvalStatus, userDisplayNa
   return (
     <>
       <header className="sticky top-0 z-50 flex h-[var(--header-height-mobile)] items-center justify-between border-b border-[var(--color-border)] bg-[var(--color-surface)] px-4 sm:h-[var(--header-height-desktop)] sm:px-6">
-        <Link href="/" prefetch={false} className="flex items-center gap-2 sm:gap-2.5">
-          <Image
-            src="/img/img_main_logo.png"
-            alt="서광주일학교 로고"
-            width={60}
-            height={60}
-            className="h-10 w-10 sm:h-[60px] sm:w-[60px]"
-            priority
-          />
-          <Image
-            src={isDarkMode ? '/img/img_main_text_logo_white.png' : '/img/img_main_text_logo.png'}
-            alt="서광주일학교"
-            width={147}
-            height={30}
-            className="h-6 w-auto sm:h-[30px]"
-            priority
-          />
+        <Link href="/" prefetch={false} className="flex items-center gap-1.5 sm:gap-2">
+          {churchName ? (
+            <span className="text-lg font-extrabold leading-none tracking-tight text-[var(--color-primary)] sm:text-2xl">
+              {churchName}
+            </span>
+          ) : (
+            <Image
+              src={isDarkMode ? '/img/img_church_logo_white.png' : '/img/img_church_logo.png'}
+              alt="송촌장로교회"
+              width={176}
+              height={34}
+              className="h-6 w-auto sm:h-[30px]"
+              priority
+            />
+          )}
+          <span className="text-lg font-extrabold leading-none tracking-tight text-[var(--color-text)] sm:text-2xl">
+            주일학교
+          </span>
         </Link>
 
         {isSignedIn ? (

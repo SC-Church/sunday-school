@@ -1,5 +1,6 @@
-import { Gender, Relationship } from '@prisma/client';
 import { z } from 'zod';
+
+import { Gender, Relationship } from '@/types/domain';
 
 const PHONE_NUMBER_REGEX = /^010-\d{4}-\d{4}$/;
 const INVALID_PHONE_MARKER = '__INVALID_PHONE__';
@@ -13,7 +14,13 @@ export const STUDENT_FIELD_LABELS: Record<string, string> = {
   guardian_name: '보호자 성함',
   guardian_relationship: '보호자 관계',
   guardian_phone: '보호자 전화번호',
+  class_id: '반',
+  note: '특이사항',
+  is_new_friend: '새친구',
+  first_visit_date: '첫 방문일',
 };
+
+export const STUDENT_NOTE_MAX_LENGTH = 500;
 
 export type StudentInputPayload = {
   name: string;
@@ -24,6 +31,11 @@ export type StudentInputPayload = {
   guardian_name: string;
   guardian_relationship: string;
   guardian_phone: string;
+  /** 배정할 반 id. 빈 문자열이면 미배정 */
+  class_id?: string;
+  note?: string;
+  is_new_friend?: boolean;
+  first_visit_date?: string;
 };
 
 /**
@@ -82,6 +94,16 @@ export const studentInputSchema = z
         '보호자 전화번호는 010-0000-0000 형식으로 입력해 주세요.'
       )
       .optional(),
+    class_id: z.string().trim().optional(),
+    note: z
+      .string()
+      .trim()
+      .max(STUDENT_NOTE_MAX_LENGTH, `특이사항은 ${STUDENT_NOTE_MAX_LENGTH}자 이하로 입력해 주세요.`),
+    is_new_friend: z.boolean(),
+    first_visit_date: z
+      .string()
+      .trim()
+      .refine((value) => !value || parseKstBirthDate(value) !== null, '첫 방문일 형식이 올바르지 않습니다.'),
   })
   .superRefine((value, ctx) => {
     const hasAnyGuardianField = Boolean(value.guardian_name || value.guardian_relationship || value.guardian_phone);
@@ -111,7 +133,18 @@ export function parseStudentInput(payload: Partial<StudentInputPayload>) {
     guardian_name: normalizeTextValue(payload.guardian_name),
     guardian_relationship: normalizeTextValue(payload.guardian_relationship),
     guardian_phone: normalizePhoneValue(payload.guardian_phone),
+    class_id: normalizeTextValue(payload.class_id),
+    note: normalizeTextValue(payload.note),
+    is_new_friend: normalizeBooleanValue(payload.is_new_friend),
+    first_visit_date: normalizeTextValue(payload.first_visit_date),
   });
+}
+
+/**
+ * 체크박스/JSON 불리언 입력값을 boolean으로 정규화한다(true, 'true', 'on'만 참).
+ */
+export function normalizeBooleanValue(value: unknown): boolean {
+  return value === true || value === 'true' || value === 'on';
 }
 
 /**

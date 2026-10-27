@@ -323,19 +323,6 @@ input[type='reset']:disabled {
   width: 100%;
 }
 
-.btn-google {
-  border-color: var(--color-border-strong);
-  color: var(--color-text);
-  background-color: var(--color-surface);
-}
-
-.btn-google:hover {
-  border-color: var(--color-border-strong);
-  color: var(--color-text);
-  background-color: var(--color-surface);
-  background-image: none;
-}
-
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

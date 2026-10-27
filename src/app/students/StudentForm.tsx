@@ -4,22 +4,29 @@ import { useMemo, useState } from 'react';
 
 import { useRouter } from 'next/navigation';
 
-import { Gender, Relationship } from '@prisma/client';
-
 import ActionModal, { type ActionModalButton } from '@/components/common/ActionModal';
 import RestrictedInput from '@/components/common/RestrictedInput';
 import { useToast } from '@/components/common/ToastProvider';
 import type { StudentInputPayload } from '@/lib/validation/student';
+import { Gender, Relationship } from '@/types/domain';
 
 const INPUT_CLASS_NAME =
   'rounded-lg border border-[var(--color-border-strong)] bg-[var(--color-surface)] px-3 py-2 text-sm text-[var(--color-text)] outline-none transition focus:border-[var(--color-primary)]';
 
 type StudentFormMode = 'create' | 'edit';
 
+export type StudentFormClassGroup = {
+  departmentId: string;
+  departmentName: string;
+  classes: Array<{ id: string; name: string }>;
+};
+
 type StudentFormProps = {
   mode: StudentFormMode;
   studentId?: string;
   initialValues: StudentInputPayload;
+  /** 현재 학년도 반 선택지(부서별) */
+  classGroups: StudentFormClassGroup[];
 };
 
 type FieldErrorMap = Partial<Record<keyof StudentInputPayload, string>>;
@@ -67,7 +74,7 @@ function FieldError({ message }: { message?: string }) {
 /**
  * 학생 등록/수정 폼을 렌더링하고 API를 통해 저장한다.
  */
-export default function StudentForm({ mode, studentId, initialValues }: StudentFormProps) {
+export default function StudentForm({ mode, studentId, initialValues, classGroups }: StudentFormProps) {
   const router = useRouter();
   const { showToast } = useToast();
   const [fieldErrors, setFieldErrors] = useState<FieldErrorMap>({});
@@ -94,6 +101,10 @@ export default function StudentForm({ mode, studentId, initialValues }: StudentF
       guardian_name: readValue('guardian_name'),
       guardian_relationship: readValue('guardian_relationship'),
       guardian_phone: readValue('guardian_phone'),
+      class_id: readValue('class_id'),
+      note: readValue('note'),
+      is_new_friend: formData.get('is_new_friend') === 'on',
+      first_visit_date: readValue('first_visit_date'),
     };
   }
 
@@ -300,6 +311,63 @@ export default function StudentForm({ mode, studentId, initialValues }: StudentF
             <FieldError message={fieldErrors.guardian_phone} />
           </label>
         </div>
+
+        <div className="grid gap-4 sm:grid-cols-3">
+          <label className="grid gap-1.5">
+            <FieldLabel label="소속 반" showOptional />
+            <select name="class_id" defaultValue={initialValues.class_id ?? ''} className={INPUT_CLASS_NAME}>
+              <option value="">미배정</option>
+              {classGroups.map((group) => (
+                <optgroup key={group.departmentId} label={group.departmentName}>
+                  {group.classes.map((classOption) => (
+                    <option key={classOption.id} value={classOption.id}>
+                      {classOption.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <FieldError message={fieldErrors.class_id} />
+            {mode === 'edit' ? (
+              <span className="text-xs text-[var(--color-muted)]">
+                반을 바꾸면 이전 반 기록은 이력으로 남고 출석·달란트는 그대로 이어집니다.
+              </span>
+            ) : null}
+          </label>
+
+          <label className="flex items-center gap-2 self-end rounded-lg border border-[var(--color-border)] bg-[var(--color-surface-soft)] px-3 py-2 text-sm text-[var(--color-text)]">
+            <input
+              name="is_new_friend"
+              type="checkbox"
+              defaultChecked={Boolean(initialValues.is_new_friend)}
+              className="h-4 w-4 rounded border border-[var(--color-border-strong)]"
+            />
+            새친구
+          </label>
+
+          <label className="grid gap-1.5">
+            <FieldLabel label="첫 방문일" showOptional />
+            <input
+              name="first_visit_date"
+              type="date"
+              defaultValue={initialValues.first_visit_date ?? ''}
+              className={INPUT_CLASS_NAME}
+            />
+            <FieldError message={fieldErrors.first_visit_date} />
+          </label>
+        </div>
+
+        <label className="grid gap-1.5">
+          <FieldLabel label="특이사항" showOptional />
+          <textarea
+            name="note"
+            rows={3}
+            defaultValue={initialValues.note ?? ''}
+            placeholder="알레르기, 가정 상황, 지도 시 참고할 점 등 (교사에게만 보입니다)"
+            className={INPUT_CLASS_NAME}
+          />
+          <FieldError message={fieldErrors.note} />
+        </label>
 
         <div className="mt-2 flex justify-end gap-2">
           <button type="submit" disabled={isSubmitting} className="btn btn-primary btn-md">

@@ -26,7 +26,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
   return (
     <html lang="ko">
       <body style={{ margin: 0, backgroundColor: COLOR_SURFACE }}>
-        <title>문제가 발생했습니다 | 서광 주일학교 관리 시스템</title>
+        <title>문제가 발생했습니다 | 송촌장로교회 주일학교 관리 시스템</title>
         <main
           style={{
             minHeight: '100dvh',

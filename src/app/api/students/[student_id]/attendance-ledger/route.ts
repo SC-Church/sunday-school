@@ -1,10 +1,10 @@
 import { NextResponse } from 'next/server';
 
-import { AttendanceStatus } from '@prisma/client';
 import { getServerSession } from 'next-auth';
 
 import { authOptions } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
+import { findStudentAttendances } from '@/server/db/repository';
+import { AttendanceStatus } from '@/types/domain';
 import { TEACHER_APPROVAL_STATUS } from '@/types/teacher';
 import { formatDateToKoreanYmd } from '@/utils/date';
 
@@ -94,15 +94,9 @@ export async function GET(_request: Request, context: RouteContext) {
     return NextResponse.json({ message: 'invalid_request' }, { status: 400 });
   }
 
-  const student = await prisma.student.findUnique({
-    where: { id: studentId },
-    select: {
-      id: true,
-      name: true,
-    },
-  });
+  const studentAttendances = await findStudentAttendances(studentId);
 
-  if (!student) {
+  if (!studentAttendances) {
     return NextResponse.json({ message: 'not_found' }, { status: 404 });
   }
 
@@ -122,19 +116,9 @@ export async function GET(_request: Request, context: RouteContext) {
     };
   });
 
-  const attendanceRows = await prisma.attendance.findMany({
-    where: {
-      studentId,
-      attendanceDate: {
-        gte: firstSunday,
-        lte: lastSunday,
-      },
-    },
-    select: {
-      attendanceDate: true,
-      status: true,
-    },
-  });
+  const attendanceRows = studentAttendances.attendances.filter(
+    (attendance) => attendance.attendanceDate >= firstSunday && attendance.attendanceDate <= lastSunday
+  );
 
   const statusByDate = new Map(
     attendanceRows.map((attendance) => [formatDateToKoreanYmd(attendance.attendanceDate), attendance.status])
@@ -145,7 +129,7 @@ export async function GET(_request: Request, context: RouteContext) {
   );
 
   return NextResponse.json({
-    studentName: student.name,
+    studentName: studentAttendances.student.name,
     schoolYearStart,
     schoolYearEnd,
     weeks,

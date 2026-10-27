@@ -6,9 +6,11 @@ import { redirect } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 
 import { authOptions } from '@/lib/auth';
-import { prisma } from '@/lib/prisma';
+import { getStoreSnapshot } from '@/server/db/repository';
 import { formatDateToKoreanYmd } from '@/utils/date';
+import { getSchoolYearInKst } from '@/utils/grade';
 
+import PasswordChangeForm from './PasswordChangeForm';
 import TeacherEditForm from './TeacherEditForm';
 
 export const metadata: Metadata = {
@@ -38,18 +40,18 @@ export default async function TeacherEditPage({ params }: TeacherEditPageProps) 
     redirect('/teachers');
   }
 
-  const teacher = await prisma.teacher.findUnique({
-    where: { id: teacherId },
-    select: {
-      id: true,
-      name: true,
-      email: true,
-      phone: true,
-      birthDate: true,
-      grade: true,
-      isActive: true,
-    },
-  });
+  const snapshot = await getStoreSnapshot();
+  const teacher = snapshot.teachers.find((candidate) => candidate.id === teacherId) ?? null;
+  const departmentNameById = new Map(snapshot.departments.map((department) => [department.id, department.name]));
+  const assignedClassesText = snapshot.classes
+    .filter(
+      (classRecord) =>
+        classRecord.schoolYear === getSchoolYearInKst() &&
+        classRecord.isActive &&
+        classRecord.teacherIds.includes(teacherId)
+    )
+    .map((classRecord) => `${departmentNameById.get(classRecord.departmentId) ?? ''} ${classRecord.name}`.trim())
+    .join(', ');
 
   if (!teacher) {
     redirect('/teachers');
@@ -59,7 +61,6 @@ export default async function TeacherEditPage({ params }: TeacherEditPageProps) 
     name: teacher.name ?? '',
     phone: teacher.phone ?? '',
     birth_date: teacher.birthDate ? formatDateToKoreanYmd(teacher.birthDate) : '',
-    grade: teacher.grade ?? '',
     is_active: teacher.isActive,
   };
 
@@ -73,8 +74,24 @@ export default async function TeacherEditPage({ params }: TeacherEditPageProps) 
           </Link>
         </div>
 
-        <TeacherEditForm teacherId={teacherId} email={teacher.email} isAdmin={isAdmin} initialValues={initialValues} />
+        <TeacherEditForm
+          teacherId={teacherId}
+          email={teacher.email}
+          isAdmin={isAdmin}
+          initialValues={initialValues}
+          assignedClassesText={assignedClassesText}
+        />
       </section>
+
+      {isSelf ? (
+        <section className="mx-auto mt-6 w-full max-w-4xl rounded-2xl border border-[var(--color-border)] bg-[var(--color-surface)] p-6 sm:p-8">
+          <h2 className="text-xl font-bold text-[var(--color-text)]">비밀번호 변경</h2>
+          <p className="mt-2 text-sm text-[var(--color-muted)]">
+            관리자에게 임시 비밀번호를 받았다면 여기서 새 비밀번호로 바꿔 주세요.
+          </p>
+          <PasswordChangeForm teacherId={teacherId} />
+        </section>
+      ) : null}
     </main>
   );
 }

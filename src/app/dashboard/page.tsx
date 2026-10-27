@@ -12,7 +12,7 @@ export const metadata: Metadata = {
  * 대시보드 페이지를 렌더링한다.
  */
 export default async function DashboardPage() {
-  const attendancePageData = await getAttendancePageData('all');
+  const attendancePageData = await getAttendancePageData();
 
   return (
     <main className="min-h-screen overflow-x-hidden px-4 py-8 sm:px-6">
